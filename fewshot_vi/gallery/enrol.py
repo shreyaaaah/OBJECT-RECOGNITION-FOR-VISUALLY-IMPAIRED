@@ -130,6 +130,7 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
 
     def say(t: str) -> None:
         say_log.append(t)
+        log.info("enrol: %s", t)
         speak(t)
 
     say("Hold the object steadily in front of the camera.")
@@ -140,6 +141,11 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
     last_hint_t = -1e9
     frames_seen = 0
     proposals_seen = 0
+    large_proposals_seen = 0
+    stable_candidates_seen = 0
+    blurry_rejections = 0
+    edge_rejections = 0
+    small_rejections = 0
 
     while len(views) < ec.max_views:
         if clock() - start > ec.timeout_s:
@@ -151,6 +157,9 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
         try:
             proposals = detector.detect(frame)
             proposals_seen += len(proposals)
+            large_proposals_seen += sum(
+                ((d.x2 - d.x1) * (d.y2 - d.y1)) / max(frame.shape[0] * frame.shape[1], 1)
+                >= ec.min_box_area_frac for d in proposals)
             det = pick_central_box(proposals, frame.shape, ec.min_box_area_frac)
         except Exception:  # noqa: BLE001 - a bad frame must not abort enrolment
             log.exception("detector failed during enrolment")
@@ -161,7 +170,7 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
                 if proposals_seen == 0:
                     say("I can't see an object yet. Hold it centered, move it closer, and use good lighting.")
                 else:
-                    say("I see something, but it is too small or off center. Move it closer and center it.")
+                    say("I see something, but it is too small. Move it closer and keep it centered.")
                 last_hint_t = clock()
             continue
         if prev_box is not None and iou(prev_box, det.box) >= ec.stable_iou:
@@ -171,6 +180,7 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
         prev_box = det.box
         if stable < ec.stable_frames:
             continue
+        stable_candidates_seen += 1
         crop = crop_box(frame, det.box)
         if crop.size == 0:
             stable = 0
@@ -178,6 +188,9 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
         q = assess(crop, det.box, frame.shape, cfg.quality.blur_var_min,
                    cfg.quality.edge_margin_px, cfg.quality.min_box_area_frac)
         if not (q.ok):
+            blurry_rejections += int(q.blurry)
+            edge_rejections += int(bool(q.edge_cut))
+            small_rejections += int(q.too_small)
             if clock() - last_hint_t > 2.0:
                 say(hint_for(q))
                 last_hint_t = clock()
@@ -202,10 +215,27 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
         if frames_seen and proposals_seen == 0:
             detail = ("The detector did not propose any boxes. It may not detect this object type; "
                       "try a larger, clearly visible item such as a cup or bottle.")
+        elif large_proposals_seen == 0:
+            detail = "The detector's boxes were too small. Move the object closer so it fills more of the frame."
+        elif stable_candidates_seen == 0:
+            detail = "The boxes did not stay still long enough. Hold the camera and object steady."
+        elif edge_rejections or blurry_rejections or small_rejections:
+            issues = []
+            if blurry_rejections:
+                issues.append("blurred")
+            if edge_rejections:
+                issues.append("cut off at the frame edge")
+            if small_rejections:
+                issues.append("too small")
+            detail = "Views were rejected as " + ", ".join(issues) + ". Improve the view and try again."
         else:
-            detail = "Keep the full object large, centered, steady, and inside the frame."
+            detail = "Rotate the object more between views, then hold each view steady."
         res.message = (f"Enrolment timed out with {len(views)} good view(s); need at least "
-                       f"{ec.min_views}. {detail} Nothing was saved.")
+                       f"{ec.min_views}. {detail} Nothing was saved. "
+                       f"Diagnostics: frames={frames_seen}, boxes={proposals_seen}, "
+                       f"large_boxes={large_proposals_seen}, stable_views={stable_candidates_seen}, "
+                       f"blur_rejections={blurry_rejections}, edge_rejections={edge_rejections}, "
+                       f"small_rejections={small_rejections}.")
         say(res.message)
         res.log = say_log
         return res

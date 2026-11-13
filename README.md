@@ -17,7 +17,7 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 
 | Item | Status |
 |---|---|
-| Unit + behavioural tests (`pytest`, 254 collected, no camera/GPU/mic/model/network) | **Passing [THIS MACHINE]** — exit code 0; all 254 reached 100% in `.venv` |
+| Unit + behavioural tests (`pytest`, 255 collected, no camera/GPU/mic/model/network) | **Passing [THIS MACHINE]** — exit code 0; all 255 reached 100% in `.venv` |
 | CLI benchmark — synthetic stub (pipeline overhead only) | **Passing [THIS MACHINE]** — 1020 FPS overhead-only, clearly labelled SYNTHETIC |
 | CLI benchmark — real YOLOv8n + real DINOv2 ViT-S/14 weights | **Measured [THIS MACHINE]** — see table below |
 | YOLOv8n weights (`yolov8n.pt`, 6.2 MB) | **Downloaded [THIS MACHINE]** via Ultralytics; cached in `fewshot_vi/` |
@@ -186,7 +186,7 @@ Names are fuzzy-matched against the gallery, and misspelled verbs are corrected.
 
 ### Guided enrolment (`--mode enrol` or "register object")
 
-1. Hold the object steadily; a large, central, stable detection is selected.
+1. Hold the object steadily; a large, central, stable detection is selected. If no usable boxes appear, enrollment gives a spoken hint and the final error reports proposal/quality counts. YOLOv8n may not propose small or uncommon personal items.
 2. 3-5 quality-approved views are captured within 30 s ("Rotate it slowly."). Blurred, edge-cut, too-small and near-duplicate views are rejected with a spoken hint.
 3. Each view gets 8 deterministic augmentations (flip, brightness/contrast, colour gain, mild crop+resize, mild blur); everything is embedded in a forward pass only - **no gradient updates**.
 4. You give a name and confirm it; examples are saved as `source='enrol'` with up to 32 salient patch tokens each.

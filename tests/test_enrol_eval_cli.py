@@ -116,6 +116,15 @@ def test_no_detector_proposals_prompt_user_and_explain_timeout():
     assert "did not propose any boxes" in r.message
 
 
+def test_too_small_detector_boxes_give_specific_enrollment_failure():
+    e = Env([SHARP], [], cfg=enrol_cfg(enrol={"timeout_s": 3}))
+    e.det = ScriptedDetector([[det(280, 200, 330, 250)]])
+    r = e.run()
+    assert not r.success and r.views == 0
+    assert "boxes were too small" in r.message
+    assert "large_boxes=0" in r.message
+
+
 def test_duplicate_views_ask_for_rotation():
     class SameEmb(ViewEmbedder):
         def embed(self, crops):
