@@ -89,7 +89,7 @@ def test_enrolment_saves_views_with_augmentations_and_patches_only_for_enrol():
 def test_blurred_views_rejected_with_spoken_hint_then_good_views_accepted():
     e = Env([BLURRY] * 12 + [SHARP], ["keys", "yes"])
     r = e.run()
-    assert r.success and "Hold the object steady." in e.said
+    assert r.success and any("hold it steady" in s.lower() for s in e.said)
     assert e.det.calls > 12
 
 
@@ -98,7 +98,16 @@ def test_edge_cut_views_rejected():
     e = Env([cut] * 30, [])
     e.det = ScriptedDetector([[det(0, 100, 200, 300)]])
     r = e.run()
-    assert not r.success and r.views == 0 and "Keep the whole object inside the camera view." in e.said
+    assert not r.success and r.views == 0
+    assert any("Move the object away from the frame edge" in s for s in e.said)
+
+
+def test_enrollment_hint_prioritizes_edge_cut_over_blur():
+    from fewshot_vi.types import Quality
+
+    q = Quality(blur=0.0, blurry=True, edge_cut=frozenset({"left"}),
+                too_small=False, low_margin=False, score=0.0)
+    assert "frame edge" in en.hint_for(q)
 
 
 def test_timeout_with_too_few_views_saves_nothing():

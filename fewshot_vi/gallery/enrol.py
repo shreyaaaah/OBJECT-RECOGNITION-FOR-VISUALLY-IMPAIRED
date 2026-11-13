@@ -110,10 +110,10 @@ def crop_box(frame: np.ndarray, box: tuple[float, float, float, float]) -> np.nd
 
 
 def hint_for(q) -> str:
-    if q.blurry:
-        return "Hold the object steady."
     if q.edge_cut:
-        return "Keep the whole object inside the camera view."
+        return "Move the object away from the frame edge so its whole outline is visible."
+    if q.blurry:
+        return "Move it slightly farther away and hold it steady so the camera can focus."
     if q.too_small:
         return "Move the object closer."
     return "Hold it steady."

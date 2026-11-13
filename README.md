@@ -17,7 +17,7 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 
 | Item | Status |
 |---|---|
-| Unit + behavioural tests (`pytest`, 255 collected, no camera/GPU/mic/model/network) | **Passing [THIS MACHINE]** — exit code 0; all 255 reached 100% in `.venv` |
+| Unit + behavioural tests (`pytest`, 256 collected, no camera/GPU/mic/model/network) | **Passing [THIS MACHINE]** — exit code 0; all 256 reached 100% in `.venv` |
 | CLI benchmark — synthetic stub (pipeline overhead only) | **Passing [THIS MACHINE]** — 1020 FPS overhead-only, clearly labelled SYNTHETIC |
 | CLI benchmark — real YOLOv8n + real DINOv2 ViT-S/14 weights | **Measured [THIS MACHINE]** — see table below |
 | YOLOv8n weights (`yolov8n.pt`, 6.2 MB) | **Downloaded [THIS MACHINE]** via Ultralytics; cached in `fewshot_vi/` |
