@@ -86,7 +86,7 @@ def _run_live_or_enrol(args, cfg) -> int:
         return 1
     try:
         print("Loading models (first run downloads weights) ...")
-        preload_models(pipe)
+        preload_models(pipe, warm_embedder=(args.mode == "enrol" or bool(pipe.store.names())))
     except Exception as exc:  # noqa: BLE001 - missing torch/ultralytics/weights/network
         print(f"error: cannot load models: {type(exc).__name__}: {exc}\n"
               "Check `pip install -r requirements.txt`, network access for the first-run model download, "
@@ -101,8 +101,10 @@ def _run_live_or_enrol(args, cfg) -> int:
             print(("OK: " if res.success else "FAILED: ") + res.message)
             return 0 if res.success else 1
         names = pipe.store.names()
-        pipe.say("Ready. " + ("You have " + ", ".join(names) + "." if names else
-                              "No objects yet. Say register object."), 40)
+        if names:
+            pipe.say("Ready. Personal objects: " + ", ".join(names) + ". I also identify common categories.", 40)
+        else:
+            pipe.say("Ready. I can identify supported object categories without enrollment.", 40)
         print("Live. Commands: what is this | find <obj> | where did I leave <obj> | register object | "
               "delete <obj> | list objects | stop | resume.  Press q in the window or Ctrl+C to quit.")
         pipe.run(show=args.show, max_frames=args.max_frames)

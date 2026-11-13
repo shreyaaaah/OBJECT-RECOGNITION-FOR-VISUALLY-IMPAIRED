@@ -105,7 +105,8 @@ def draw_overlay(frame: np.ndarray, tracks: list[Track], fps: float, stats: Late
         name = t.smoothed_name
         colour = (0, 200, 0) if name else ((0, 200, 255) if t.match and t.match.decision == Decision.AMBIGUOUS else (0, 0, 200))
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
-        score = f" {t.match.score:.2f}" if t.match and t.match.object_id is not None else ""
+        score = (f" {t.match.score:.2f}" if t.match and t.match.object_id is not None
+                 else f" {t.score:.2f}" if t.class_name is not None else "")
         label = f"#{t.track_id} {name or '?'}{score}"
         cv2.putText(out, label, (x1, max(12, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
     lines = [f"FPS {fps:.1f}"]
@@ -124,6 +125,9 @@ class Pipeline:
                  reranker: Optional[PatchReranker] = None, hand_tracker=None,
                  state: Optional[AppState] = None, clock: Callable[[], float] = time.monotonic) -> None:
         self.cfg, self.store, self.detector, self.embedder = cfg, store, detector, embedder
+        # If no personal references exist, detector categories are sufficient;
+        # skip the substantially slower DINO embedding pass in live mode.
+        self._personal_enabled = bool(store.names())
         self.camera, self.speaker, self.beeper, self.stt = camera, speaker, beeper, stt
         self.clock = clock
         self.state = state or AppState()
@@ -183,7 +187,9 @@ class Pipeline:
         if self._dialog_active.is_set():  # answer to an in-progress question
             self._replies.put(text)
             return
-        cmd = parse_command(text, self.store.names(), self.cfg.voice.fuzzy_cutoff)
+        names = self.store.names()
+        categories = getattr(self.detector, "class_names", [])
+        cmd = parse_command(text, list(dict.fromkeys(names + categories)), self.cfg.voice.fuzzy_cutoff)
         I = Intent
         if self._pending_delete is not None:
             name, t0 = self._pending_delete
@@ -204,7 +210,11 @@ class Pipeline:
             self.state.set_mode(Mode.FIND, cmd.name, now=self.clock())
             self.say(f"Looking for your {cmd.name}.")
         elif cmd.intent == I.MEMORY_QUERY:
-            self.say(self.memory.answer(cmd.name))
+            if cmd.name not in self.store.names():
+                self.say(f"I can identify {cmd.name} while it is visible, but I need it in your personal gallery "
+                         "to remember where it was seen.")
+            else:
+                self.say(self.memory.answer(cmd.name))
         elif cmd.intent == I.ENROL:
             self.state.post("enrol")
         elif cmd.intent == I.DELETE:
@@ -212,7 +222,8 @@ class Pipeline:
             self.say(f"Delete {cmd.name}? Say yes to confirm.", eng.PRIORITY_SYSTEM)
         elif cmd.intent == I.LIST:
             names = self.store.names()
-            self.say("You have " + (", ".join(names) + "." if names else "no objects yet."))
+            self.say("Your personal objects are " + ", ".join(names) + "." if names else
+                     "No personal objects are enrolled. I can still identify the categories I was trained to detect.")
         elif cmd.intent == I.MUTE:
             self.state.set_muted(True)
             self.speaker.clear(below_priority=eng.PRIORITY_ANSWER)
@@ -242,6 +253,7 @@ class Pipeline:
                     self.run_enrolment()
                 elif kind == "delete":
                     ok = self.store.delete_object(payload)
+                    self._personal_enabled = bool(self.store.names())
                     self.tracker.tracks.clear()  # drop cached matches that may name the deleted object
                     self.say(f"{payload} deleted." if ok else f"I could not find {payload}.")
             except Exception:  # noqa: BLE001
@@ -267,7 +279,12 @@ class Pipeline:
             self.state.set_mode(prev_mode, prev_target, now=self.clock())
         if res.success:
             self.last_enrolled = res.name
+            self._personal_enabled = True
             self.tracker.tracks.clear()
+            if self.cfg.features.memory and isinstance(self.scene.classifier, NullSceneClassifier):
+                self.scene.stop()
+                from .memory.scene import ClipSceneClassifier
+                self.scene = SceneWorker(ClipSceneClassifier(), self.cfg.memory.scene_every_n_s).start()
         return res
 
     # ============================================================== frame logic
@@ -298,6 +315,20 @@ class Pipeline:
             t.smoothed_conf = float(np.mean(t.conf_history))
         elif t.smoothed_id is None:
             t.smoothed_conf = 0.0
+        # A confident personalized identity wins; otherwise announce the
+        # detector's temporally stable category label.
+        if t.smoothed_name is not None or t.class_name is None:
+            t.category_history.append(None)
+            return
+        t.category_history.append(t.class_name)
+        categories = [name for name in t.category_history if name is not None]
+        if categories:
+            category, count = Counter(categories).most_common(1)[0]
+            if count >= self.cfg.temporal.min_votes:
+                t.smoothed_id = None
+                t.smoothed_name = category
+                t.smoothed_conf = float(t.score)
+                t.stable_accepts = count
 
     def process_frame(self, frame: np.ndarray, ts: float) -> list[GuidanceEvent]:
         """All per-frame work. Raises on error; ``step`` wraps it."""
@@ -335,6 +366,8 @@ class Pipeline:
         need = []
         for t in tracks:
             if not t.needs_embed or t.missed > 0:
+                continue
+            if t.class_name is not None and not self._personal_enabled:
                 continue
             crop = self._crop(frame, t)
             if crop.size == 0:
@@ -535,7 +568,8 @@ def build_pipeline(cfg: Config, db_path: str, camera_index: Optional[Any] = None
                            imgsz=cfg.detector.imgsz)
         emb = DinoEmbedder(cfg.embedder.model, cfg.embedder.input_size, cfg.embedder.fp16)
         speaker = tts.Speaker(tts.make_backend(), stale_s=cfg.guidance_policy.stale_speech_s)
-        scene = ClipSceneClassifier() if cfg.features.memory else NullSceneClassifier("memory disabled")
+        scene = (ClipSceneClassifier() if cfg.features.memory and store.names()
+                 else NullSceneClassifier("no personal objects enrolled"))
         hands = HandTracker() if cfg.features.hand_guidance else None
         return Pipeline(cfg, store, det, emb, cam, speaker, Beeper(), make_stt(not keyboard_only), scene,
                         hand_tracker=hands)
@@ -544,12 +578,12 @@ def build_pipeline(cfg: Config, db_path: str, camera_index: Optional[Any] = None
         raise
 
 
-def preload_models(pipe: Pipeline) -> None:
+def preload_models(pipe: Pipeline, warm_embedder: bool = True) -> None:
     """Load/warm the detector and embedder now so download or dependency errors
     surface before the live loop (raises the underlying exception)."""
     warm_det = getattr(pipe.detector, "warmup", None)
     if warm_det is not None:
         warm_det()
     warm_emb = getattr(pipe.embedder, "warmup", None)
-    if warm_emb is not None:
+    if warm_embedder and warm_emb is not None:
         warm_emb()

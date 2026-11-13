@@ -35,7 +35,9 @@ class IoUTracker:
 
     def _new_track(self, det: Detection) -> Track:
         t = Track(track_id=self._next_id, bbox=det.box, score=det.score,
+                  class_name=det.class_name, class_id=det.class_id,
                   label_history=deque(maxlen=self.history), conf_history=deque(maxlen=self.history))
+        t.category_history = deque(maxlen=self.history)
         self._vel[t.track_id] = np.zeros(4)
         self.tracks[t.track_id] = t
         self._next_id += 1
@@ -75,6 +77,7 @@ class IoUTracker:
             new = np.asarray(d.box, dtype=float)
             self._vel[tid] = 0.5 * self._vel[tid] + 0.5 * (new - np.asarray(t.bbox))
             t.bbox, t.score, t.missed = d.box, d.score, 0
+            t.class_name, t.class_id = d.class_name, d.class_id
         for di, d in enumerate(detections):
             if di not in used_d:
                 self._new_track(d)

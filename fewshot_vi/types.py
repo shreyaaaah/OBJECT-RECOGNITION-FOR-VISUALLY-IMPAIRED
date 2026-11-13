@@ -29,6 +29,8 @@ class Detection:
     x2: float
     y2: float
     score: float
+    class_name: Optional[str] = None
+    class_id: Optional[int] = None
 
     @property
     def box(self) -> tuple[float, float, float, float]:
@@ -73,6 +75,9 @@ class Track:
     patches: Optional[np.ndarray] = None
     needs_embed: bool = True
     score: float = 0.0
+    class_name: Optional[str] = None
+    class_id: Optional[int] = None
+    category_history: deque = field(default_factory=lambda: deque(maxlen=7))
     label_history: deque = field(default_factory=lambda: deque(maxlen=7))
     conf_history: deque = field(default_factory=lambda: deque(maxlen=7))
     match: Optional[Match] = None

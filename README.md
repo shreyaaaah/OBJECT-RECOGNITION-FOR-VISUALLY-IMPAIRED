@@ -1,23 +1,24 @@
-# Active and Memory-Augmented Few-Shot Personal Object Recognition for the Visually Impaired
+# Real-Time Assistive Object Recognition with Optional Few-Shot Personalization
 
-A local, privacy-preserving assistive app. A user registers personal objects (keys, wallet, mug, medicine box)
-from 3-5 views **without training anything**, and the app recognises them from a live camera and speaks guidance such as
-*"Keys, slightly left, about one metre."*
+A local, privacy-preserving assistive app. It recognizes supported pretrained object categories automatically;
+no enrollment or user dataset is needed for those categories. Users can optionally add 3-5 views of a personal
+item (such as keys or a medicine box) when they want a name beyond the detector's standard categories. It speaks
+guidance such as *"Cup, slightly left, about one metre."*
 
-Four features beyond a plain detect-embed-match pipeline:
+Optional personalization features beyond automatic category recognition:
 
 1. **Active re-view** - low-quality or ambiguous views produce one concise hint ("Hold the camera steady.", "Move closer.", "Move the camera left.", "Not sure. Try a different angle.").
-2. **Object memory** - confident sightings are logged (time, bounding box, CLIP scene label) so "Where did I leave my keys?" works for objects not in view.
+2. **Object memory** - confident sightings of enrolled personal objects are logged (time, bounding box, CLIP scene label) so "Where did I leave my keys?" works for objects not in view.
 3. **Look-alike handling** - objects marked as confusers are re-ranked with patch-token matching, asynchronously.
 4. **Safe gallery updates** - very confident, stable matches are added automatically behind many guards; enrolment examples are never removed.
 
 ## Verification status (read this first)
 
-Sections marked **[BUILD ENV]** were verified in the original Linux build environment. Sections marked **[THIS MACHINE]** were verified on the target machine (Windows 11, AMD64 Family 23 Model 160, 8 logical cores, AMD Radeon 610M GPU — CPU-only PyTorch, no CUDA).
+Sections marked **[BUILD ENV]** were verified in the original Linux build environment. Sections marked **[THIS MACHINE]** were verified on the target machine (Windows 11, AMD64 Family 23 Model 160, 8 logical cores, AMD Radeon 610M GPU — CPU-only PyTorch, no CUDA). Category-label integration is newer than these results and still needs a fresh run.
 
 | Item | Status |
 |---|---|
-| Unit + behavioural tests (`pytest`, 256 collected, no camera/GPU/mic/model/network) | **Passing [THIS MACHINE]** — exit code 0; all 256 reached 100% in `.venv` |
+| Unit + behavioural tests (`pytest`, 256 collected, no camera/GPU/mic/model/network) | **Passing before category-label integration** — integration still needs verification |
 | CLI benchmark — synthetic stub (pipeline overhead only) | **Passing [THIS MACHINE]** — 1020 FPS overhead-only, clearly labelled SYNTHETIC |
 | CLI benchmark — real YOLOv8n + real DINOv2 ViT-S/14 weights | **Measured [THIS MACHINE]** — see table below |
 | YOLOv8n weights (`yolov8n.pt`, 6.2 MB) | **Downloaded [THIS MACHINE]** via Ultralytics; cached in `fewshot_vi/` |
@@ -25,7 +26,7 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 | DINOv2 loads and runs a forward pass | **Verified [THIS MACHINE]** — 22 M parameters, forward pass runs on CPU |
 | Any real-dataset accuracy / ablation result | **NOT produced.** No personal-object dataset was provided. See the eval section for dataset layout requirements. |
 | CUDA / FP16 / MPS paths | **Not verified** (AMD Radeon 610M has no PyTorch backend; CPU-only). Device selection logic is unit-tested with mocks. |
-| Real camera live loop | **Verified [THIS MACHINE]** — `python run.py --mode live --keyboard-only --max-frames 60` ran 60 frames from camera 0, **0 errors, 12.0 FPS rolling**, 92.9 ms mean total/frame, 185.8 ms mean detect (p95 266.9 ms). Gallery empty so no recognition events (expected). Clean shutdown. |
+| Real camera live loop | **Historical baseline before category-label integration** — `python run.py --mode live --keyboard-only --max-frames 60` ran 60 frames from camera 0, **0 errors, 12.0 FPS rolling**, 92.9 ms mean total/frame, 185.8 ms mean detect (p95 266.9 ms). Updated category speech has not been verified on-camera yet. |
 | Microphone STT (faster-whisper / sounddevice) | **Not verified** — optional packages not installed; falls back to keyboard input (logged, not silent). |
 | pyttsx3 speech output | **Installed and importable [THIS MACHINE]**; actual audio playback not verified headlessly. |
 | CLIP scene labels, MediaPipe hands | **Not installed** (optional). Disabled with logged warning; system continues without them. |
@@ -141,9 +142,10 @@ After the first run everything works offline.
 
 ## What you need to provide manually
 
-* **Live recognition and enrollment do not need a downloaded dataset.** For a personal object, use guided camera enrollment or import 3-5 sharp photos of it from a folder; the folder route avoids the enrollment camera detector. In either case you enroll only the specific objects you want the system to recognize by identity.
-* **Model weights are required.** With internet access, the first run downloads `yolov8n.pt` and the DINOv2 ViT-S/14 Torch Hub code/weights. If the target PC is offline, copy the Ultralytics `yolov8n.pt` file and the complete PyTorch Torch Hub cache for `facebookresearch/dinov2` from a connected machine. The app does not silently substitute random weights.
-* **YOLO can only propose regions it learned to detect.** Ignoring COCO class names does not make YOLOv8n a universal object detector; small or uncommon items such as loose keys may produce no boxes. Enrollment now gives a spoken repositioning hint and explains this if no boxes are proposed. If it still cannot see the item, enrollment cannot proceed with the current detector.
+* **General category recognition needs no enrollment or user dataset.** The app uses the category labels from pretrained YOLO weights, and speaks the supported category when it appears. Multiple items of the same class are all announced as that class.
+* **Personal names are optional.** To identify a particular item outside the detector's categories (for example, your own keys), use guided enrollment or import 3-5 sharp photos. This adds an optional personalized match; it is not required for general category recognition.
+* **Model weights are required.** With internet access, the first run downloads `yolov8n.pt`. DINOv2 weights are needed only when using personal gallery matching, guided enrollment, or DINO evaluation. The app does not silently substitute random weights.
+* **The supported categories are limited to those in the detector's pretrained model.** Common objects are recognized by category; uncommon items such as loose keys may not have a category label. Optional personal enrollment can provide a custom name when the detector proposes a box for the item.
 * **A dataset is only needed for evaluation and threshold calibration.** Create folders such as `DATA/keys/*.jpg`, `DATA/wallet/*.jpg`, with each image showing one object crop and the folder name as its class. The default full evaluation over 1/3/5-shot episodes needs at least 8 classes: 5 classes with at least 10 images each, and 3 additional classes with at least 5 images each. You can lower `--n-way`, `--n-unknown`, `--n-query`, and `--k-shot` for a smaller dataset. Do not use enrollment photos as both support and query images; the evaluator samples disjoint images within each episode.
 * **Microphone, speaker, and GPU are hardware checks you must do on the target PC.** The application has keyboard and console fallbacks, but those fallbacks are not spoken guidance. Run `python run.py --mode benchmark` after installing weights to measure that machine; synthetic benchmark numbers do not measure DINOv2 or the camera.
 
@@ -156,7 +158,7 @@ python run.py --mode live                       # camera 0, microphone if availa
 python run.py --mode live --show                # + debug overlay (boxes, ids, scores, FPS, timings)
 python run.py --mode live --camera clip.mp4     # video file instead of a camera
 python run.py --mode live --keyboard-only       # never touch the microphone
-python run.py --mode enrol                      # guided enrolment of one object, then exit
+python run.py --mode enrol                      # optional: add a personal object
 python run.py --mode enrol --images photos\mug --name "blue mug"  # import 3-5 photos; no camera
 python run.py --mode eval --ablation --dataset DATA --embedder dino --out results/ablation.csv
 python run.py --mode benchmark                  # real detector + DINOv2 if loadable; reports NOT MEASURED otherwise
@@ -174,18 +176,18 @@ If no microphone (or `faster-whisper`/`sounddevice`) is usable, the app logs a w
 
 | Say | Effect |
 |---|---|
-| what is this / identify | IDENTIFY mode: announces each newly confirmed object once per cooldown |
-| find my X / where is my X | FIND mode: only X; direction + distance + stereo beeps (faster/higher when closer); active hints if not visible; after `find_memory_wait_s` it answers from memory |
-| where did I leave my X | Memory answer: "Your keys were last seen 12 minutes ago, on the desk." |
+| what is this / identify | Announces visible supported categories and any confidently matched personal objects |
+| find a cup / find my X / where is X | FIND mode: follows the requested category or personal name; direction + approximate distance + stereo beeps |
+| where did I leave my X | Memory answer for enrolled personal items: "Your keys were last seen 12 minutes ago, on the desk." |
 | register object / add object | Guided enrolment |
 | delete X / forget X | Asks for a spoken "yes" before deleting |
-| list objects | Lists gallery names |
+| list objects | Lists enrolled personal objects; category detection works without a gallery |
 | stop / quiet, resume | Mute / unmute guidance |
 | this is similar to X | Marks the most recently enrolled object as a look-alike of X |
 
 Names are fuzzy-matched against the gallery, and misspelled verbs are corrected.
 
-### Guided enrolment (`--mode enrol` or "register object")
+### Optional personal-object enrollment (`--mode enrol` or "register object")
 
 1. Hold the object steadily; a large, central, stable detection is selected. If no usable boxes appear, enrollment gives a spoken hint and the final error reports proposal/quality counts. YOLOv8n may not propose small or uncommon personal items.
 2. 3-5 quality-approved views are captured within 30 s ("Rotate it slowly."). Blurred, edge-cut, too-small and near-duplicate views are rejected with a spoken hint.
@@ -207,11 +209,11 @@ The application asks you to confirm before saving the examples to the same galle
 
 ```
 Camera thread (Queue(2), drop-oldest)
-  -> detect every N frames (YOLO, class-agnostic) / IoU tracker predicts on skipped frames
-  -> embed only NEW or CHANGED tracks, batched in one DINOv2 pass (CLS + patch tokens)
-  -> matcher: cosine vs gallery -> ACCEPT / AMBIGUOUS / UNKNOWN
+  -> detect every N frames (YOLO boxes + pretrained category labels) / IoU tracker predicts on skipped frames
+  -> announce stable category labels directly; if a personal gallery exists, embed new tracks in one DINOv2 batch
+  -> optional matcher: cosine vs personal gallery -> ACCEPT / AMBIGUOUS / UNKNOWN; accepted personal name takes precedence
        AMBIGUOUS between marked look-alikes -> async patch re-rank worker (deadline-bound)
-  -> temporal vote (window/min_votes) -> only SMOOTHED ACCEPT results may be named
+  -> temporal vote (window/min_votes) -> stable detector categories or SMOOTHED personal matches may be named
   -> quality (blur, edge-cut, size, margin) -> active hints / gallery-update queue / sighting writer queue
   -> guidance engine -> prioritised, interruptible TTS thread + stereo beeps
 Voice thread: STT or keyboard -> intent parser -> AppState (thread-safe) -> vision loop

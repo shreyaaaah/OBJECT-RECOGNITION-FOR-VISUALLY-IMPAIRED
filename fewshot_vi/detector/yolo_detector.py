@@ -1,4 +1,4 @@
-"""Ultralytics YOLO used as a class-agnostic box proposer."""
+"""Ultralytics YOLO detector returning boxes and pretrained category labels."""
 from __future__ import annotations
 
 import logging
@@ -12,9 +12,10 @@ log = logging.getLogger(__name__)
 
 
 class YoloDetector(Detector):
-    """Loads Ultralytics YOLO lazily. Class labels are ignored on purpose:
-    personal objects (keys, pill boxes) are generally not COCO classes, so every
-    box above ``conf`` is kept (class-agnostic NMS), capped at ``max_objects``.
+    """Loads Ultralytics YOLO lazily and preserves its category predictions.
+
+    The default ``yolov8n.pt`` weights are trained on COCO categories. Personal
+    gallery matching remains available for items outside those categories.
     """
 
     def __init__(self, weights: str = "yolov8n.pt", conf: float = 0.25,
@@ -37,6 +38,14 @@ class YoloDetector(Detector):
     def warmup(self, shape: tuple[int, int] = (480, 640)) -> None:
         self.detect(np.zeros((*shape, 3), dtype=np.uint8))
 
+    @property
+    def class_names(self) -> list[str]:
+        if self._model is None:
+            return []
+        names = self._model.names
+        return [str(names[i]) for i in range(len(names))] if not isinstance(names, dict) \
+            else [str(names[i]) for i in sorted(names)]
+
     def detect(self, frame: np.ndarray) -> list[Detection]:
         model = self._load()
         res = model.predict(frame, imgsz=self.imgsz, conf=self.conf, agnostic_nms=True, max_det=self.max_objects,
@@ -46,8 +55,15 @@ class YoloDetector(Detector):
             return []
         xyxy = boxes.xyxy.cpu().numpy()
         conf = boxes.conf.cpu().numpy()
+        class_ids = boxes.cls.cpu().numpy().astype(int)
         order = np.argsort(-conf)[: self.max_objects]
-        return [Detection(*map(float, xyxy[i]), float(conf[i])) for i in order]
+        names = model.names
+        detections = []
+        for i in order:
+            class_id = int(class_ids[i])
+            name = names.get(class_id, str(class_id)) if isinstance(names, dict) else names[class_id]
+            detections.append(Detection(*map(float, xyxy[i]), float(conf[i]), str(name), class_id))
+        return detections
 
     def close(self) -> None:
         self._model = None
