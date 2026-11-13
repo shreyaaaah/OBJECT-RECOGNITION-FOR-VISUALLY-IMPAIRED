@@ -33,6 +33,7 @@ enrol:
   stable_frames: 5          # consecutive frames the central box must be stable
   min_box_area_frac: 0.05
   stable_iou: 0.8
+  no_detection_hint_s: 3.0   # remind the user if the proposer sees no usable box
 guidance_policy:
   find_memory_wait_s: 10    # in FIND mode, wait this long before answering from memory
   near_zone_frac: 0.10      # |offset| below this -> "centre"

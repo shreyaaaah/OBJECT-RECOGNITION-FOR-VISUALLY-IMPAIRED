@@ -107,6 +107,15 @@ def test_timeout_with_too_few_views_saves_nothing():
     assert not r.success and e.store.names() == [] and "Nothing was saved" in r.message
 
 
+def test_no_detector_proposals_prompt_user_and_explain_timeout():
+    e = Env([SHARP], [], cfg=enrol_cfg(enrol={"timeout_s": 3}))
+    e.det = ScriptedDetector([[]])
+    r = e.run()
+    assert not r.success and r.views == 0 and e.store.names() == []
+    assert any("can't see an object" in message.lower() for message in e.said)
+    assert "did not propose any boxes" in r.message
+
+
 def test_duplicate_views_ask_for_rotation():
     class SameEmb(ViewEmbedder):
         def embed(self, crops):

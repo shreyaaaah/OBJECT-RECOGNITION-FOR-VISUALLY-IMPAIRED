@@ -138,7 +138,8 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
     prev_box: Optional[tuple] = None
     stable = 0
     last_hint_t = -1e9
-    rotate_needed = False
+    frames_seen = 0
+    proposals_seen = 0
 
     while len(views) < ec.max_views:
         if clock() - start > ec.timeout_s:
@@ -146,13 +147,22 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
         frame = get_frame()
         if frame is None:
             continue
+        frames_seen += 1
         try:
-            det = pick_central_box(detector.detect(frame), frame.shape, ec.min_box_area_frac)
+            proposals = detector.detect(frame)
+            proposals_seen += len(proposals)
+            det = pick_central_box(proposals, frame.shape, ec.min_box_area_frac)
         except Exception:  # noqa: BLE001 - a bad frame must not abort enrolment
             log.exception("detector failed during enrolment")
             continue
         if det is None:
             stable, prev_box = 0, None
+            if clock() - last_hint_t >= ec.no_detection_hint_s:
+                if proposals_seen == 0:
+                    say("I can't see an object yet. Hold it centered, move it closer, and use good lighting.")
+                else:
+                    say("I see something, but it is too small or off center. Move it closer and center it.")
+                last_hint_t = clock()
             continue
         if prev_box is not None and iou(prev_box, det.box) >= ec.stable_iou:
             stable += 1
@@ -189,8 +199,13 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
 
     res.views = len(views)
     if len(views) < ec.min_views:
+        if frames_seen and proposals_seen == 0:
+            detail = ("The detector did not propose any boxes. It may not detect this object type; "
+                      "try a larger, clearly visible item such as a cup or bottle.")
+        else:
+            detail = "Keep the full object large, centered, steady, and inside the frame."
         res.message = (f"Enrolment timed out with {len(views)} good view(s); need at least "
-                       f"{ec.min_views}. Nothing was saved.")
+                       f"{ec.min_views}. {detail} Nothing was saved.")
         say(res.message)
         res.log = say_log
         return res

@@ -17,7 +17,7 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 
 | Item | Status |
 |---|---|
-| Unit + behavioural tests (`pytest`, 253 collected, no camera/GPU/mic/model/network) | **Passing [THIS MACHINE]** — exit code 0; all 253 reached 100% in `.venv` |
+| Unit + behavioural tests (`pytest`, 254 collected, no camera/GPU/mic/model/network) | **Passing [THIS MACHINE]** — exit code 0; all 254 reached 100% in `.venv` |
 | CLI benchmark — synthetic stub (pipeline overhead only) | **Passing [THIS MACHINE]** — 1020 FPS overhead-only, clearly labelled SYNTHETIC |
 | CLI benchmark — real YOLOv8n + real DINOv2 ViT-S/14 weights | **Measured [THIS MACHINE]** — see table below |
 | YOLOv8n weights (`yolov8n.pt`, 6.2 MB) | **Downloaded [THIS MACHINE]** via Ultralytics; cached in `fewshot_vi/` |
@@ -143,6 +143,7 @@ After the first run everything works offline.
 
 * **Live recognition and enrollment do not need a downloaded dataset.** You need a working camera and the personal object in view; guided enrollment captures its 3-5 views locally.
 * **Model weights are required.** With internet access, the first run downloads `yolov8n.pt` and the DINOv2 ViT-S/14 Torch Hub code/weights. If the target PC is offline, copy the Ultralytics `yolov8n.pt` file and the complete PyTorch Torch Hub cache for `facebookresearch/dinov2` from a connected machine. The app does not silently substitute random weights.
+* **YOLO can only propose regions it learned to detect.** Ignoring COCO class names does not make YOLOv8n a universal object detector; small or uncommon items such as loose keys may produce no boxes. Enrollment now gives a spoken repositioning hint and explains this if no boxes are proposed. If it still cannot see the item, enrollment cannot proceed with the current detector.
 * **A dataset is only needed for evaluation and threshold calibration.** Create folders such as `DATA/keys/*.jpg`, `DATA/wallet/*.jpg`, with each image showing one object crop and the folder name as its class. The default full evaluation over 1/3/5-shot episodes needs at least 8 classes: 5 classes with at least 10 images each, and 3 additional classes with at least 5 images each. You can lower `--n-way`, `--n-unknown`, `--n-query`, and `--k-shot` for a smaller dataset. Do not use enrollment photos as both support and query images; the evaluator samples disjoint images within each episode.
 * **Microphone, speaker, and GPU are hardware checks you must do on the target PC.** The application has keyboard and console fallbacks, but those fallbacks are not spoken guidance. Run `python run.py --mode benchmark` after installing weights to measure that machine; synthetic benchmark numbers do not measure DINOv2 or the camera.
 
