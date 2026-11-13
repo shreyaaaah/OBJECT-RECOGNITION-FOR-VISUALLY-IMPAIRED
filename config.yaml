@@ -1,0 +1,48 @@
+camera: {index: 0, width: 640, height: 480, target_fps: 30}
+detector: {backend: yolo, weights: yolov8n.pt, conf: 0.25, detect_every_n_frames: 2, max_objects: 10, imgsz: 640}
+embedder: {model: dinov2_vits14, input_size: 224, fp16: true}
+matching: {accept_sim: 0.70, ambiguous_sim: 0.55, min_margin: 0.08, knn_k: 3}
+temporal: {window: 7, min_votes: 4}
+gallery: {max_embeddings_per_object: 20, update_min_sim: 0.85, update_min_margin: 0.15, update_cooldown_s: 5}
+quality: {blur_var_min: 60.0, edge_margin_px: 8, min_box_area_frac: 0.02}
+guidance: {hint_cooldown_s: 4, announce_cooldown_s: 3, known_object_width_cm_default: 8, camera_hfov_deg: 65}
+memory: {min_conf_to_log: 0.80, log_cooldown_s: 10, scene_every_n_s: 5}
+features: {self_improve: true, active_hints: true, memory: true, patch_rerank: true, hand_guidance: false, depth_model: false}
+
+# ---- Additional tunables (all behaviour thresholds live here) ----
+tracker:
+  reembed_iou: 0.6          # re-embed if IoU vs last-embedded box falls below this
+  reembed_every_frames: 30  # ...or after this many frames
+  match_iou: 0.3            # min IoU to associate a detection with a track
+  max_missed_frames: 10     # drop a track after this many frames without a detection
+rerank:
+  deadline_s: 0.03          # worker time budget; provisional result kept on a miss
+  top_patches: 32           # salient patch tokens kept per enrolment view
+  min_gain: 0.0             # re-rank must beat provisional by this to change the label
+  accept_patch_sim: 0.50    # min symmetric patch score for a re-ranked winner (UNVERIFIED default; tune on your data)
+  min_patch_margin: 0.02    # min patch-score gap between re-ranked winner and runner-up
+gallery_policy:
+  duplicate_sim: 0.97       # reject auto-embeddings this close to an existing one
+  drift_min_sim: 0.60       # stop auto-adding if auto/prototype similarity falls below this
+enrol:
+  min_views: 3
+  max_views: 5
+  timeout_s: 30
+  augmentations_per_view: 8
+  seed: 1234
+  stable_frames: 5          # consecutive frames the central box must be stable
+  min_box_area_frac: 0.05
+  stable_iou: 0.8
+guidance_policy:
+  find_memory_wait_s: 10    # in FIND mode, wait this long before answering from memory
+  near_zone_frac: 0.10      # |offset| below this -> "centre"
+  slight_zone_frac: 0.20    # |offset| below this -> "slightly left/right"
+  stale_speech_s: 2.0       # drop low-priority speech older than this
+  beep_min_interval_s: 0.1
+  beep_max_interval_s: 1.0
+  beep_far_m: 3.0
+  beep_near_m: 0.3
+voice:
+  fuzzy_cutoff: 0.6         # difflib ratio for gallery-name resolution
+  confirm_timeout_s: 8
+logging: {level: INFO}

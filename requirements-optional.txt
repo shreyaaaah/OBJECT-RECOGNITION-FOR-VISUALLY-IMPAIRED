@@ -1,0 +1,13 @@
+# Optional live speech recognition. Without these, typed keyboard input is used.
+sounddevice==0.5.6
+faster-whisper==1.2.1
+
+# Optional CLIP scene classification. Without this, sightings still store time
+# and position but have no scene label.
+open_clip_torch==4.2.2
+
+# Optional hand-guided reach; keep features.hand_guidance false unless installed.
+mediapipe==1.2.3
+
+# Optional random-initialized transformer latency benchmark only.
+timm==1.0.31

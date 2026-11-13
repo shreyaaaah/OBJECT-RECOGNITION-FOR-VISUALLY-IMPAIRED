@@ -1,0 +1,8 @@
+# Lower-compute profile for CPU-only machines.
+# Smaller images run faster but may miss small objects or reduce look-alike separation.
+# Evaluate on your own objects before relying on this profile for safety-critical use.
+detector:
+  imgsz: 320
+embedder:
+  input_size: 140
+  fp16: false
