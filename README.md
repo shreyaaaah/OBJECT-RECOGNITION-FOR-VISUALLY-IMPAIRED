@@ -141,7 +141,7 @@ After the first run everything works offline.
 
 ## What you need to provide manually
 
-* **Live recognition and enrollment do not need a downloaded dataset.** You need a working camera and the personal object in view; guided enrollment captures its 3-5 views locally.
+* **Live recognition and enrollment do not need a downloaded dataset.** For a personal object, use guided camera enrollment or import 3-5 sharp photos of it from a folder; the folder route avoids the enrollment camera detector. In either case you enroll only the specific objects you want the system to recognize by identity.
 * **Model weights are required.** With internet access, the first run downloads `yolov8n.pt` and the DINOv2 ViT-S/14 Torch Hub code/weights. If the target PC is offline, copy the Ultralytics `yolov8n.pt` file and the complete PyTorch Torch Hub cache for `facebookresearch/dinov2` from a connected machine. The app does not silently substitute random weights.
 * **YOLO can only propose regions it learned to detect.** Ignoring COCO class names does not make YOLOv8n a universal object detector; small or uncommon items such as loose keys may produce no boxes. Enrollment now gives a spoken repositioning hint and explains this if no boxes are proposed. If it still cannot see the item, enrollment cannot proceed with the current detector.
 * **A dataset is only needed for evaluation and threshold calibration.** Create folders such as `DATA/keys/*.jpg`, `DATA/wallet/*.jpg`, with each image showing one object crop and the folder name as its class. The default full evaluation over 1/3/5-shot episodes needs at least 8 classes: 5 classes with at least 10 images each, and 3 additional classes with at least 5 images each. You can lower `--n-way`, `--n-unknown`, `--n-query`, and `--k-shot` for a smaller dataset. Do not use enrollment photos as both support and query images; the evaluator samples disjoint images within each episode.
@@ -157,6 +157,7 @@ python run.py --mode live --show                # + debug overlay (boxes, ids, s
 python run.py --mode live --camera clip.mp4     # video file instead of a camera
 python run.py --mode live --keyboard-only       # never touch the microphone
 python run.py --mode enrol                      # guided enrolment of one object, then exit
+python run.py --mode enrol --images photos\mug --name "blue mug"  # import 3-5 photos; no camera
 python run.py --mode eval --ablation --dataset DATA --embedder dino --out results/ablation.csv
 python run.py --mode benchmark                  # real detector + DINOv2 if loadable; reports NOT MEASURED otherwise
 python run.py --mode benchmark --synthetic      # pipeline overhead only (stub models, clearly labelled)
@@ -191,6 +192,16 @@ Names are fuzzy-matched against the gallery, and misspelled verbs are corrected.
 3. Each view gets 8 deterministic augmentations (flip, brightness/contrast, colour gain, mild crop+resize, mild blur); everything is embedded in a forward pass only - **no gradient updates**.
 4. You give a name and confirm it; examples are saved as `source='enrol'` with up to 32 salient patch tokens each.
 5. It offers to mark an existing object as a confuser.
+
+### Photo-folder enrolment (camera-free)
+
+If camera-guided enrolment cannot get stable boxes, put 3-5 sharp photos of one object in a folder. Use different angles and lighting, keep the whole object visible, and avoid backgrounds dominated by other objects. These photos are embedded locally; they are not uploaded and do not train or fine-tune DINOv2.
+
+```powershell
+python run.py --mode enrol --images .\photos\blue_mug --name "blue mug"
+```
+
+The application asks you to confirm before saving the examples to the same gallery used by live mode. This bypasses detection only while adding the reference photos. During live recognition YOLO still has to propose a box around the object; the photo import cannot make YOLO detect an object it misses.
 
 ## How it works
 

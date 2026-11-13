@@ -3,6 +3,7 @@
 
     python run.py --mode live  [--show] [--camera 0|video.mp4] [--keyboard-only]
     python run.py --mode enrol [--camera 0]
+    python run.py --mode enrol --images photos\mug --name "blue mug"
     python run.py --mode eval  --dataset DIR [--ablation] [--embedder dino|color-hist]
     python run.py --mode benchmark [--embedder dino|random-init] [--synthetic]
 
@@ -26,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", default=str(HERE / "config.yaml"))
     p.add_argument("--db", default=str(HERE / "data" / "gallery.db"), help="SQLite gallery path")
     p.add_argument("--camera", default=None, help="camera index or video file (default: config camera.index)")
+    p.add_argument("--images", default=None,
+                   help="enrol: folder with 3-5 sharp photos of the same object (no camera needed)")
+    p.add_argument("--name", default=None, help="enrol: object name for --images import")
     p.add_argument("--show", action="store_true", help="show the debug overlay window")
     p.add_argument("--keyboard-only", action="store_true", help="never try the microphone; type commands")
     p.add_argument("--max-frames", type=int, default=None)
@@ -71,6 +75,8 @@ def make_embedder(name: str, cfg):
 
 
 def _run_live_or_enrol(args, cfg) -> int:
+    if args.mode == "enrol" and args.images:
+        return _run_image_enrolment(args, cfg)
     from fewshot_vi.capture.camera import CameraError
     from fewshot_vi.pipeline import build_pipeline, preload_models
     try:
@@ -104,6 +110,60 @@ def _run_live_or_enrol(args, cfg) -> int:
         return 0
     finally:
         pipe.close()
+
+
+def _run_image_enrolment(args, cfg) -> int:
+    """Import local photos into the production DINOv2 gallery without a camera."""
+    from fewshot_vi.embedder.dino_embedder import DinoEmbedder
+    from fewshot_vi.gallery.enrol import is_yes, run_image_enrolment
+    from fewshot_vi.gallery.store import GalleryStore
+
+    image_dir = Path(args.images)
+    valid_exts = {".jpg", ".jpeg", ".png", ".bmp"}
+    try:
+        image_count = (sum(p.is_file() and p.suffix.lower() in valid_exts for p in image_dir.iterdir())
+                       if image_dir.is_dir() else 0)
+    except OSError as exc:
+        print(f"error: cannot read image folder: {exc}", file=sys.stderr)
+        return 2
+    if not image_dir.is_dir() or not cfg.enrol.min_views <= image_count <= cfg.enrol.max_views:
+        print(f"error: --images must contain {cfg.enrol.min_views}-{cfg.enrol.max_views} readable image files; "
+              f"found {image_count}", file=sys.stderr)
+        return 2
+    try:
+        name = args.name.strip() if args.name else input("Object name: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("Enrollment cancelled; nothing was saved.")
+        return 1
+    if not name:
+        print("error: object name is required", file=sys.stderr)
+        return 2
+    try:
+        confirmed = is_yes(input(f"Add {name!r} to the gallery from {args.images!r}? [y/N] "))
+    except (EOFError, KeyboardInterrupt):
+        print("Enrollment cancelled; nothing was saved.")
+        return 1
+    if not confirmed:
+        print("Enrollment cancelled; nothing was saved.")
+        return 1
+    store = embedder = None
+    try:
+        store = GalleryStore(args.db, top_patches=cfg.rerank.top_patches)
+        embedder = DinoEmbedder(cfg.embedder.model, cfg.embedder.input_size, cfg.embedder.fp16)
+        print("Loading DINOv2 weights (first run downloads weights) ...")
+        embedder.warmup()
+        result = run_image_enrolment(image_dir=args.images, name=name, confirmed=confirmed,
+                                     cfg=cfg, store=store, embedder=embedder)
+        print(("OK: " if result.success else "FAILED: ") + result.message)
+        return 0 if result.success else 1
+    except Exception as exc:  # noqa: BLE001 - give a useful model/DB failure at the CLI boundary
+        print(f"error: image enrollment failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
+    finally:
+        if embedder is not None:
+            embedder.close()
+        if store is not None:
+            store.close()
 
 
 def _run_eval(args, cfg) -> int:
@@ -161,6 +221,12 @@ def _run_benchmark(args, cfg) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.images and args.mode != "enrol":
+        print("error: --images is only valid with --mode enrol", file=sys.stderr)
+        return 2
+    if args.name and not args.images:
+        print("error: --name is only valid with --mode enrol --images DIR", file=sys.stderr)
+        return 2
     sys.path.insert(0, str(HERE))
     from fewshot_vi.config import ConfigError, load_config
     try:

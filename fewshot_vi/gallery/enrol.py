@@ -17,13 +17,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
 import cv2
 import numpy as np
 
 from ..embedder.dino_embedder import select_salient
-from ..quality.quality import assess
+from ..quality.quality import assess, laplacian_blur
 from ..tracker.tracker import iou
 from ..types import Detection
 from .store import GalleryError, GalleryStore
@@ -294,4 +295,78 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
         else:
             say("I did not recognise that object, so no look-alike link was made.")
     res.log = say_log
+    return res
+
+
+def run_image_enrolment(*, image_dir: str | Path, name: str, confirmed: bool,
+                        cfg, store: GalleryStore, embedder) -> EnrolResult:
+    """Enroll a personal object from 3-5 pre-cropped image files, without a camera.
+
+    Each image must be a sharp crop of the same physical object. This bypasses
+    the live detector during enrollment; live recognition still needs a detector
+    proposal for the object in the camera frame.
+    """
+    res = EnrolResult(False, "")
+    folder = Path(image_dir)
+    if not folder.is_dir():
+        res.message = f"Image folder not found: {folder}"
+        return res
+    exts = {".jpg", ".jpeg", ".png", ".bmp"}
+    paths = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in exts)
+    ec = cfg.enrol
+    if len(paths) < ec.min_views or len(paths) > ec.max_views:
+        res.message = f"Provide {ec.min_views} to {ec.max_views} image files; found {len(paths)}. Nothing was saved."
+        return res
+    clean_name = name.strip()
+    if not clean_name:
+        res.message = "Object name must not be empty. Nothing was saved."
+        return res
+    if any(clean_name.casefold() == existing.casefold() for existing in store.names()):
+        res.message = f"An object called {clean_name!r} already exists. Nothing was saved."
+        return res
+    if not confirmed:
+        res.message = f"Enrollment of {clean_name} was not confirmed. Nothing was saved."
+        return res
+
+    embedded_views = []
+    for index, path in enumerate(paths):
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if image is None or image.size == 0:
+            res.message = f"Could not read {path.name}. Nothing was saved."
+            return res
+        blur = laplacian_blur(image)
+        if blur < cfg.quality.blur_var_min:
+            res.message = (f"{path.name} is too blurry (sharpness {blur:.1f}; need "
+                           f"{cfg.quality.blur_var_min:.1f}). Nothing was saved.")
+            return res
+        crops = [image] + augment(image, ec.augmentations_per_view, ec.seed + index)
+        try:
+            cls, patches = embedder.embed(crops)
+        except Exception as exc:  # noqa: BLE001 - preserve an actionable import error
+            res.message = f"Could not embed {path.name}: {exc}. Nothing was saved."
+            return res
+        embedded_views.append((cls, patches))
+
+    object_id = None
+    try:
+        object_id = store.add_object(clean_name)
+        embedding_count = 0
+        for cls, patches in embedded_views:
+            for i in range(cls.shape[0]):
+                store.add_embedding(object_id, cls[i], "enrol",
+                                    patches=select_salient(patches[i], cfg.rerank.top_patches))
+                embedding_count += 1
+    except Exception as exc:  # noqa: BLE001 - avoid partial silent enrollment
+        # Only remove the object if this invocation created it. In particular,
+        # never delete a pre-existing object after a duplicate-name error.
+        if object_id is not None:
+            store.delete_object(clean_name)
+        res.message = f"Could not save {clean_name}: {exc}. Nothing was saved."
+        return res
+
+    res.success = True
+    res.name = clean_name
+    res.views = len(paths)
+    res.embeddings = embedding_count
+    res.message = f"Saved {clean_name} from {res.views} image views ({embedding_count} embeddings)."
     return res
