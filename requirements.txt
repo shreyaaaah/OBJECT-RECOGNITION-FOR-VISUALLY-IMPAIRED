@@ -17,5 +17,10 @@ ultralytics==8.4.211
 # the application explicitly falls back to console speech.
 pyttsx3==2.99
 
+# Local accessible web application and REST API.
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27,<1
+python-multipart>=0.0.9,<1
+
 # Optional packages are separated into requirements-optional.txt so a missing
 # hardware dependency or incompatible optional wheel cannot block the core app.

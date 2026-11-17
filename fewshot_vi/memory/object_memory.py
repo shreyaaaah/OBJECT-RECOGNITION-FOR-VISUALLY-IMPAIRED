@@ -124,6 +124,23 @@ class ObjectMemory:
             return f"I don't have an object called {name}."
         return format_last_seen(name, self.last_seen(name), now)
 
+    def all_last_seen(self, now: Optional[float] = None) -> list[dict]:
+        """Return memory records for all registered objects."""
+        now = self.wall() if now is None else now
+        records = []
+        for oid, name in self.store.list_objects():
+            sighting = self.store.last_sighting(oid)
+            records.append({
+                "object_id": oid,
+                "name": name,
+                "last_seen_ts": sighting.ts if sighting else None,
+                "time_ago": humanise_delta(now - sighting.ts) if sighting else None,
+                "location": sighting.scene_label if sighting else None,
+                "confidence": sighting.conf if sighting else None,
+                "spoken_answer": format_last_seen(name, sighting, now),
+            })
+        return records
+
     def close(self) -> None:
         self.flush()
         try:

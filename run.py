@@ -23,10 +23,12 @@ log = logging.getLogger("run")
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Few-shot personal object recogniser for the visually impaired")
-    p.add_argument("--mode", choices=["live", "enrol", "eval", "benchmark", "tts-test"], required=True)
+    p.add_argument("--mode", choices=["live", "enrol", "eval", "benchmark", "tts-test", "web"], required=True)
     p.add_argument("--config", default=str(HERE / "config.yaml"))
     p.add_argument("--db", default=str(HERE / "data" / "gallery.db"), help="SQLite gallery path")
     p.add_argument("--camera", default=None, help="camera index or video file (default: config camera.index)")
+    p.add_argument("--host", default="127.0.0.1", help="web mode bind address (default: local computer only)")
+    p.add_argument("--port", type=int, default=8000, help="web mode port")
     p.add_argument("--images", default=None,
                    help="enrol: folder with 3-5 sharp examples of one class (no camera needed)")
     p.add_argument("--name", default=None, help="enrol: object name for --images import")
@@ -159,6 +161,16 @@ def _run_image_enrolment(args, cfg) -> int:
         result = run_image_enrolment(image_dir=args.images, name=name, confirmed=confirmed,
                                      cfg=cfg, store=store, embedder=embedder,
                                      append_shots=args.append_shots)
+        if result.success:
+            try:
+                metrics = store.adapt_metric(epochs=50)
+                if metrics is not None and store.adapter is not None:
+                    adapter_path = Path(args.db).with_name("metric_adapter.pt")
+                    adapter_path.parent.mkdir(parents=True, exist_ok=True)
+                    store.adapter.save(adapter_path)
+                    print("Few-shot metric updated: " + metrics.summary())
+            except Exception as exc:  # Do not misreport saved examples as a failed enrollment.
+                print(f"WARNING: examples were saved, but metric adaptation failed: {exc}", file=sys.stderr)
         print(("OK: " if result.success else "FAILED: ") + result.message)
         return 0 if result.success else 1
     except Exception as exc:  # noqa: BLE001 - give a useful model/DB failure at the CLI boundary
@@ -267,6 +279,17 @@ def main(argv=None) -> int:
         return 2
     logging.basicConfig(level=getattr(logging, str(cfg.logging.level).upper(), logging.INFO),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.mode == "web":
+        try:
+            import uvicorn
+            from fewshot_vi.api.server import AppContext, create_app
+            web_context = AppContext(cfg=cfg, db_path=args.db)
+            print(f"Starting local assistive vision app at http://127.0.0.1:{args.port}")
+            uvicorn.run(create_app(web_context), host=args.host, port=args.port, log_level="info")
+            return 0
+        except ImportError as exc:
+            print("error: web mode dependencies are missing; install requirements.txt", file=sys.stderr)
+            return 3
     if args.mode in ("live", "enrol"):
         return _run_live_or_enrol(args, cfg)
     if args.mode == "tts-test":

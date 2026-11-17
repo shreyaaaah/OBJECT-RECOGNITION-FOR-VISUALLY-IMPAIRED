@@ -36,7 +36,14 @@ class Matcher:
     def scores(self, q: np.ndarray) -> list[tuple[int, float]]:
         """Per-object scores for query ``q``, sorted best-first."""
         store = self.store
-        E, owner = store.snapshot()
+        if hasattr(store, "matching_snapshot"):
+            E, owner, q = store.matching_snapshot(q)
+        else:
+            use_adapted = getattr(store, "use_adapter", False)
+            E, owner = store.snapshot(use_adapted=use_adapted)
+            q = np.asarray(q, dtype=np.float32).ravel()
+            if use_adapted and getattr(store, "adapter", None) is not None:
+                q = store.adapter.transform_numpy(q)
         if E.shape[0] == 0:
             return []
         q = np.asarray(q, dtype=np.float32).ravel()

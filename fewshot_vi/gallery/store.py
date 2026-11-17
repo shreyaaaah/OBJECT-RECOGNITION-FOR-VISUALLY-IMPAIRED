@@ -16,8 +16,9 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import numpy as np
 
@@ -75,6 +76,9 @@ class GalleryStore:
         self.owner = np.zeros((0,), dtype=np.int64)
         self.emb_ids = np.zeros((0,), dtype=np.int64)
         self.sources: list[str] = []
+        self.adapter: Optional[Any] = None
+        self.use_adapter: bool = False
+        self.E_adapted = np.zeros((0, dim), dtype=np.float32)
         self._reload()
 
     # ------------------------------------------------------------------ mirror
@@ -90,11 +94,75 @@ class GalleryStore:
             self.emb_ids = np.array([r[0] for r in rows], dtype=np.int64)
             self.owner = np.array([r[1] for r in rows], dtype=np.int64)
             self.sources = [r[3] for r in rows]
+            if self.adapter is not None and self.use_adapter and self.E.shape[0] > 0:
+                self.E_adapted = self.adapter.transform_numpy(self.E)
+            else:
+                self.E_adapted = self.E.copy()
 
-    def snapshot(self) -> tuple[np.ndarray, np.ndarray]:
+    def snapshot(self, use_adapted: bool = True) -> tuple[np.ndarray, np.ndarray]:
         """Consistent ``(E, owner)`` pair (arrays are replaced, never mutated in place)."""
         with self._lock:
+            if (use_adapted and self.use_adapter and self.adapter is not None
+                    and self.E_adapted.shape[0] == self.E.shape[0]):
+                return self.E_adapted, self.owner
             return self.E, self.owner
+
+    def matching_snapshot(self, query: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return gallery and query in the same metric state, atomically.
+
+        Training holds this store lock, so a live request cannot combine an old
+        gallery matrix with a query transformed by half-updated adapter weights.
+        """
+        with self._lock:
+            q = np.asarray(query, dtype=np.float32).ravel()
+            if (self.use_adapter and self.adapter is not None
+                    and self.E_adapted.shape[0] == self.E.shape[0]):
+                return self.E_adapted, self.owner, self.adapter.transform_numpy(q)
+            return self.E, self.owner, q
+
+    def set_adapter(self, adapter: Any) -> None:
+        """Assign a FewShotMetricAdapter and update the adapted matrix."""
+        with self._lock:
+            self.adapter = adapter
+            self.use_adapter = True
+            if self.E.shape[0] > 0:
+                self.E_adapted = adapter.transform_numpy(self.E)
+
+    def reset_adapter(self) -> None:
+        """Forget learned metric weights and return matching to frozen features."""
+        with self._lock:
+            self.adapter = None
+            self.use_adapter = False
+            self.E_adapted = self.E.copy()
+
+    def adapt_metric(self, epochs: int = 50, lr: float = 1.5e-3) -> Optional[Any]:
+        """Train or refine the few-shot metric adapter on current gallery samples."""
+        with self._lock:
+            if self.E.shape[0] == 0:
+                return None
+            enrol_mask = np.asarray([source == "enrol" for source in self.sources], dtype=bool)
+            train_E = self.E[enrol_mask]
+            train_owner = self.owner[enrol_mask]
+            # A metric requires real positive and negative classes. Never invent
+            # random pseudo-objects to make a single enrolled item look trainable.
+            if len(np.unique(train_owner)) < 2:
+                self.use_adapter = False
+                self.E_adapted = self.E.copy()
+                return None
+            from ..metric_adapter.adapter import FewShotMetricAdapter
+            from ..metric_adapter.trainer import MetricAdapterTrainer
+
+            # Train a private copy and commit its weights and gallery matrix only
+            # after every step succeeds. A failed fit must not corrupt live matching.
+            candidate = (deepcopy(self.adapter) if self.adapter is not None else
+                         FewShotMetricAdapter(in_dim=self.dim, hidden_dim=self.dim, out_dim=256))
+            trainer = MetricAdapterTrainer(adapter=candidate, epochs=epochs, lr=lr)
+            metrics = trainer.train_on_gallery(train_E, train_owner)
+            adapted = candidate.transform_numpy(self.E)
+            self.adapter = candidate
+            self.use_adapter = True
+            self.E_adapted = adapted
+            return metrics
 
     # ----------------------------------------------------------------- objects
     def add_object(self, name: str) -> int:
@@ -139,6 +207,29 @@ class GalleryStore:
             self._db.commit()
             self._reload()
             return True
+
+    def rename_object(self, object_id: int, new_name: str) -> bool:
+        """Rename an enrolled object."""
+        new_name = new_name.strip()
+        if not new_name:
+            raise GalleryError("new name must not be empty")
+        with self._lock:
+            try:
+                cur = self._db.execute("UPDATE objects SET name = ? WHERE id = ?", (new_name, object_id))
+                self._db.commit()
+                return cur.rowcount > 0
+            except sqlite3.IntegrityError as exc:
+                raise GalleryError(f"object with name {new_name!r} already exists") from exc
+
+    def clear_all(self) -> None:
+        """Delete all objects, embeddings, and sightings (complete privacy wipe)."""
+        with self._lock:
+            self._db.execute("DELETE FROM sightings")
+            self._db.execute("DELETE FROM embeddings")
+            self._db.execute("DELETE FROM objects")
+            self._db.commit()
+            self._reload()
+            self.reset_adapter()
 
     # ------------------------------------------------------------- confusers
     def set_confusers(self, name_a: str, name_b: str) -> int:
@@ -189,6 +280,11 @@ class GalleryStore:
         with self._lock:
             if self.get_name(object_id) is None:
                 raise GalleryError(f"unknown object id {object_id}")
+            previous_count = self.E.shape[0]
+            previous_adapted = self.E_adapted
+            adapted_row = None
+            if self.adapter is not None and self.use_adapter:
+                adapted_row = self.adapter.transform_numpy(cls[None, :])
             cur = self._db.execute(
                 "INSERT INTO embeddings(object_id, cls_blob, patches_blob, source, created_at) "
                 "VALUES(?,?,?,?,?)", (object_id, cls.tobytes(), blob_p, source, time.time()))
@@ -201,6 +297,13 @@ class GalleryStore:
             self.emb_ids = np.append(self.emb_ids, cur.lastrowid)
             self.sources.append(source)
             self.dim = self.E.shape[1]
+            if self.adapter is not None and self.use_adapter:
+                if previous_adapted.shape[0] == previous_count and adapted_row is not None:
+                    self.E_adapted = np.vstack((previous_adapted, adapted_row))
+                else:
+                    self.E_adapted = self.adapter.transform_numpy(self.E)
+            else:
+                self.E_adapted = self.E.copy()
             return int(cur.lastrowid)
 
     def add_embeddings_batch(self, object_id: int,

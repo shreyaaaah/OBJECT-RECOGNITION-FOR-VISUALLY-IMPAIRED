@@ -24,6 +24,7 @@ import logging
 import threading
 import time
 from collections import Counter
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import cv2
@@ -124,8 +125,10 @@ class Pipeline:
     def __init__(self, cfg: Config, store: GalleryStore, detector, embedder, camera, speaker,
                  beeper=None, stt=None, scene: Optional[SceneClassifier] = None,
                  reranker: Optional[PatchReranker] = None, hand_tracker=None,
-                 state: Optional[AppState] = None, clock: Callable[[], float] = time.monotonic) -> None:
+                 state: Optional[AppState] = None, clock: Callable[[], float] = time.monotonic,
+                 metric_adapter_path: Optional[Path] = None) -> None:
         self.cfg, self.store, self.detector, self.embedder = cfg, store, detector, embedder
+        self.metric_adapter_path = metric_adapter_path
         # If no personal references exist, detector categories are sufficient;
         # skip the substantially slower DINO embedding pass in live mode.
         self._personal_enabled = bool(store.names())
@@ -256,6 +259,23 @@ class Pipeline:
                     self.run_enrolment()
                 elif kind == "delete":
                     ok = self.store.delete_object(payload)
+                    if ok:
+                        self.store.reset_adapter()
+                        metrics = None
+                        try:
+                            metrics = self.store.adapt_metric(epochs=40) if self.store.E.shape[0] else None
+                        except Exception:
+                            log.exception("deleted %s, but the remaining metric could not be retrained", payload)
+                        if self.metric_adapter_path is not None:
+                            try:
+                                if metrics is not None and self.store.adapter is not None:
+                                    self.store.adapter.save(self.metric_adapter_path)
+                                elif self.metric_adapter_path.exists():
+                                    self.metric_adapter_path.unlink(missing_ok=True)
+                            except Exception:
+                                log.exception("could not persist metric reset after deleting %s", payload)
+                                if self.metric_adapter_path.exists():
+                                    self.metric_adapter_path.unlink(missing_ok=True)
                     self._personal_enabled = bool(self.store.names())
                     self.tracker.tracks.clear()  # drop cached matches that may name the deleted object
                     self.say(f"{payload} deleted." if ok else f"I could not find {payload}.")
@@ -281,6 +301,13 @@ class Pipeline:
         finally:
             self.state.set_mode(prev_mode, prev_target, now=self.clock())
         if res.success:
+            try:
+                metrics = self.store.adapt_metric(epochs=50)
+                if metrics is not None and self.store.adapter is not None and self.metric_adapter_path is not None:
+                    self.store.adapter.save(self.metric_adapter_path)
+                    log.info("Updated personal-object metric: %s", metrics.summary())
+            except Exception:
+                log.exception("enrolment succeeded, but few-shot metric adaptation failed")
             self.last_enrolled = res.name
             self._personal_enabled = True
             self.tracker.tracks.clear()
@@ -580,6 +607,25 @@ def build_pipeline(cfg: Config, db_path: str, camera_index: Optional[Any] = None
         cam.start()  # raises CameraError with a helpful message
     try:
         store = GalleryStore(db_path, top_patches=cfg.rerank.top_patches)
+        adapter_path = Path(db_path).with_name("metric_adapter.pt")
+        if adapter_path.exists():
+            try:
+                from .metric_adapter.adapter import FewShotMetricAdapter
+                store.adapter = FewShotMetricAdapter.load(adapter_path)
+                if len(np.unique(store.owner)) >= 2:
+                    store.set_adapter(store.adapter)
+            except Exception as exc:  # noqa: BLE001 - keep the raw DINO matcher available
+                log.warning("could not load metric adapter %s: %s", adapter_path, exc)
+        if len(np.unique(store.owner)) >= 2:
+            try:
+                metrics = store.adapt_metric(epochs=35)
+                if metrics is not None and store.adapter is not None:
+                    try:
+                        store.adapter.save(adapter_path)
+                    except Exception:
+                        log.exception("could not persist the updated personal-object metric")
+            except Exception:  # noqa: BLE001 - preserve live service with frozen DINO embeddings
+                log.exception("initial few-shot metric adaptation failed; retaining the last valid metric if available")
         det = YoloDetector(cfg.detector.weights, cfg.detector.conf, cfg.detector.max_objects,
                            imgsz=cfg.detector.imgsz)
         emb = DinoEmbedder(cfg.embedder.model, cfg.embedder.input_size, cfg.embedder.fp16)
@@ -588,7 +634,7 @@ def build_pipeline(cfg: Config, db_path: str, camera_index: Optional[Any] = None
                  else NullSceneClassifier("no personal objects enrolled"))
         hands = HandTracker() if cfg.features.hand_guidance else None
         return Pipeline(cfg, store, det, emb, cam, speaker, Beeper(), make_stt(not keyboard_only), scene,
-                        hand_tracker=hands)
+                        hand_tracker=hands, metric_adapter_path=adapter_path)
     except Exception:
         cam.stop()
         raise

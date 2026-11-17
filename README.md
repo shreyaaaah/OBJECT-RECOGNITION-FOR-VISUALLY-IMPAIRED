@@ -1,12 +1,13 @@
 # Few-Shot Computer Vision for Real-Time Assistive Object Recognition
 
 A local, privacy-preserving **few-shot computer-vision system** for assistive object recognition. YOLO proposes
-object regions; DINOv2 compares each region against a small gallery of example photos you provide. By default,
-the app speaks only a stable, accepted match to one of those learned classes. If an object does not match the
-gallery strongly enough, it is reported as unknown instead of being named directly from YOLO's generic COCO
-label. A mistaken embedding match is still possible until thresholds are calibrated. For example, `cell phone`
-on the debug overlay is only YOLO's proposal label; it is not a few-shot recognition result. No model is trained
-from scratch.
+object regions and a frozen DINOv2 backbone extracts visual features. In the web enrollment workflow, a user
+teaches personal items with short videos; a small projection head is then trained with supervised contrastive
+and hard-negative triplet losses on views of the real enrolled objects. The full vision backbone is not
+retrained. Live recognition compares detections with that adapted gallery, rejects uncertain matches, applies
+temporal voting, and provides speech, direction and approximate-distance guidance. The detector's generic
+labels (for example, `cell phone`) are not presented as a personal identity. A mistaken embedding match remains
+possible until thresholds are calibrated on representative data.
 
 The project-specific behaviour is open-set few-shot recognition: add a class from a handful of examples, attempt
 to recognize other instances of that class, reject low-confidence matches, and provide stable direction and
@@ -17,7 +18,7 @@ category announcements for comparison, but it is off by default.
 Additional system features:
 
 1. **Active re-view** - low-quality or ambiguous views produce one concise hint ("Hold the camera steady.", "Move closer.", "Move the camera left.", "Not sure. Try a different angle.").
-2. **Object memory** - confident sightings of enrolled personal objects are logged (time, bounding box, CLIP scene label) so "Where did I leave my keys?" works for objects not in view.
+2. **Object memory** - confident sightings of enrolled personal objects are logged with time and image position. A room or surface is named only when actual scene data is available; the web app does not invent a location.
 3. **Look-alike handling** - objects marked as confusers are re-ranked with patch-token matching, asynchronously.
 4. **Safe gallery updates** - very confident, stable matches are added automatically behind many guards; enrolment examples are never removed.
 
@@ -27,7 +28,7 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 
 | Item | Status |
 |---|---|
-| Unit + behavioural tests (`pytest`; hardware-independent) | **Passing [THIS MACHINE]** — 266 passed after few-shot and TTS integration changes |
+| Unit + behavioural tests (`pytest`; hardware-independent) | **Passing [THIS MACHINE]** — 287 passed after video enrollment, metric adaptation, and API integration |
 | Real pretrained category detection | **Verified [THIS MACHINE]** — local YOLOv8n weights detected 6 labeled objects in Ultralytics' `bus.jpg` sample (`bus`, `person`, `stop sign`); this is a smoke check, not an accuracy evaluation |
 | CLI benchmark — synthetic stub (pipeline overhead only) | **Passing [THIS MACHINE]** — 1020 FPS overhead-only, clearly labelled SYNTHETIC |
 | CLI benchmark — real YOLOv8n + real DINOv2 ViT-S/14 weights | **Measured [THIS MACHINE]** — see table below |
@@ -168,6 +169,7 @@ python run.py --mode live --show                # + debug overlay (boxes, ids, s
 python run.py --mode live --camera clip.mp4     # video file instead of a camera
 python run.py --mode live --keyboard-only       # never touch the microphone
 python run.py --mode tts-test                   # test speaker output; no camera or microphone
+python run.py --mode web                        # local browser app (build frontend first; default bind is private)
 python run.py --mode enrol                      # guided, camera-based example collection
 python run.py --mode enrol --images photos\mobile --name "mobile phone"  # 3-5 examples; no camera
 python run.py --mode enrol --images photos\mobile_more --name "mobile phone" --append-shots  # add examples
@@ -176,6 +178,44 @@ python run.py --mode benchmark                  # real detector + DINOv2 if load
 python run.py --mode benchmark --synthetic      # pipeline overhead only (stub models, clearly labelled)
 python -m pytest                                # tests
 ```
+
+### Full web application
+
+The web application implements the project brief's video-based few-shot workflow, live recognition, object
+management, and find/memory pages. Build the frontend once and start the local API/model service:
+
+```powershell
+cd frontend
+npm install
+npm run build
+cd ..
+.\.venv\Scripts\python.exe run.py --mode web
+```
+
+Open `http://127.0.0.1:8000`. On first start, YOLO and DINOv2 weights must be available; with internet access the
+model libraries download them. The camera is accessed by the browser and the captured frames are sent only to
+the loopback service on this same computer. The server binds to `127.0.0.1` by default. To work on the UI while
+developing, run the API in one terminal and `npm run dev` in `frontend` in another; Vite proxies `/api` to the
+local server.
+
+In **Teach personal objects**, record a six-second clip per object while slowly turning it, or upload an existing
+5–10 second video. The app accepts batches of up to 10 objects. It samples sharp and visually distinct frames,
+uses YOLO proposals when available (with a centered crop fallback), computes frozen DINOv2 embeddings, adds
+lightweight image augmentations, and stores only embeddings and names in SQLite. A genuine metric head is
+trained after at least two real object classes are present; with one class the app uses the frozen DINOv2
+embedding and does not fabricate a negative class. It is fine to register one object at a time and add more
+later; the metric head is retrained as the real gallery grows.
+
+The browser's system speech synthesizer speaks accepted matches and find guidance. Use the **Speech on/off**
+control to mute it. The **Object memory** page lets you rename or delete items and permanently clear the local
+gallery. Live camera FPS depends on the CPU/GPU and objects in view; the existing CPU measurements do not meet
+the original 15 FPS target, so a GPU or lower-resolution config may be needed. Recognition accuracy and false
+acceptance rate have not been measured on your own objects; do not treat approximate distance as a safety sensor.
+
+The frontend's local development server is explicitly bound to loopback. The current npm advisory database also
+flags the transitive `picomatch` ReDoS issue in Vite's development dependency tree; upstream lists no patched
+`picomatch` release yet ([advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)). Production uses the built
+static frontend through FastAPI, not Vite's development server. Re-run `npm audit` when upstream publishes a fix.
 
 Exit codes: 0 ok, 1 runtime failure (camera, enrolment), 2 usage/config/dataset error, 3 missing dependency or model that cannot be loaded.
 
@@ -208,7 +248,7 @@ Names are fuzzy-matched against the gallery, and misspelled verbs are corrected.
 
 ### Photo-folder enrolment (camera-free)
 
-If camera-guided enrollment cannot get stable boxes, put 3-5 sharp photos for one class in a folder. They can show different physical examples of the same broad class; include different angles and lighting, keep the object visible, and avoid backgrounds dominated by unrelated objects. These photos are embedded locally; they are not uploaded and do not train or fine-tune DINOv2. Add further 3-5 photo batches with `--append-shots`.
+If camera-guided enrollment cannot get stable boxes, put 3-5 sharp photos for one class in a folder. They can show different physical examples of the same broad class; include different angles and lighting, keep the object visible, and avoid backgrounds dominated by unrelated objects. These photos are embedded locally and are not uploaded. If at least two real object classes exist in the gallery, the small metric projection head is adapted; the DINOv2 backbone itself is never fine-tuned. Add further 3-5 photo batches with `--append-shots`.
 
 ```powershell
 python run.py --mode enrol --images .\photos\mobile --name "mobile phone"

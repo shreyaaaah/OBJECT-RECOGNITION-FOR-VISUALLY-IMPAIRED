@@ -377,7 +377,7 @@ def test_benchmark_synthetic_overhead_run_end_to_end():
 
 
 # ------------------------------------------------------------------------ CLI
-def test_cli_error_paths_and_exit_codes(tmp_path, capsys):
+def test_cli_error_paths_and_exit_codes(tmp_path, capsys, monkeypatch):
     assert run_cli.main(["--mode", "eval", "--ablation"]) == 2
     assert "--dataset" in capsys.readouterr().err
     assert run_cli.main(["--mode", "eval", "--ablation", "--dataset", str(tmp_path / "x"), "--embedder", "color-hist"]) == 2
@@ -386,6 +386,11 @@ def test_cli_error_paths_and_exit_codes(tmp_path, capsys):
     bad.write_text("matching: {accept_sim: 3}\n")
     assert run_cli.main(["--mode", "benchmark", "--config", str(bad)]) == 2
     assert "invalid configuration" in capsys.readouterr().err
+    from fewshot_vi.capture.camera import CameraError
+    import fewshot_vi.pipeline as pipeline_module
+    def camera_unavailable(*_args, **_kwargs):
+        raise CameraError("cannot open camera 99")
+    monkeypatch.setattr(pipeline_module, "build_pipeline", camera_unavailable)
     assert run_cli.main(["--mode", "live", "--camera", "99", "--keyboard-only", "--db", str(tmp_path / "g.db")]) == 1
     assert "cannot open camera" in capsys.readouterr().err
     with pytest.raises(SystemExit) as ei:
