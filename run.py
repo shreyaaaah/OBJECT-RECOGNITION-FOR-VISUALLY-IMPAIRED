@@ -3,7 +3,7 @@
 
     python run.py --mode live  [--show] [--camera 0|video.mp4] [--keyboard-only]
     python run.py --mode enrol [--camera 0]
-    python run.py --mode enrol --images photos\mug --name "blue mug"
+    python run.py --mode enrol --images photos/mug --name "blue mug"
     python run.py --mode eval  --dataset DIR [--ablation] [--embedder dino|color-hist]
     python run.py --mode benchmark [--embedder dino|random-init] [--synthetic]
 

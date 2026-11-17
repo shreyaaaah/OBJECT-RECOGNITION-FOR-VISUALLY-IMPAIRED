@@ -224,8 +224,7 @@ class Pipeline:
             self.say(f"Delete {cmd.name}? Say yes to confirm.", eng.PRIORITY_SYSTEM)
         elif cmd.intent == I.LIST:
             names = self.store.names()
-            self.say("Your personal objects are " + ", ".join(names) + "." if names else
-                     "No personal objects are enrolled. I can still identify the categories I was trained to detect.")
+            self.say("You have " + (", ".join(names) + "." if names else "no objects yet."))
         elif cmd.intent == I.MUTE:
             self.state.set_muted(True)
             self.speaker.clear(below_priority=eng.PRIORITY_ANSWER)

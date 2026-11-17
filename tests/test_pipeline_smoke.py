@@ -99,6 +99,43 @@ def test_unknown_object_is_never_named(rig):
     assert tr.match.decision == Decision.UNKNOWN and tr.smoothed_name is None
 
 
+def test_supported_detector_category_is_announced_without_gallery_or_dino(rig):
+    from fewshot_vi.types import Detection
+
+    rig.detector.class_names = ["cup"]
+    rig.detector.script = [[Detection(*BOX, 0.93, "cup", 41)]]
+    frame = textured_frame([(*BOX, GREEN)])
+    assert rig.run_frames(frame, 1) == []  # temporal confirmation suppresses one-frame guesses
+    events = rig.run_frames(frame, 1)
+    assert [event.text for event in events if event.kind == "announce"] == [
+        "Cup, slightly left, about half a metre."
+    ]
+    assert rig.embedder.calls == 0 and rig.store.names() == []
+
+
+def test_personal_gallery_match_takes_precedence_over_detector_category():
+    from fewshot_vi.types import Detection
+
+    store = GalleryStore(":memory:", dim=DIM)
+    oid = store.add_object("blue mug")
+    store.add_embedding(oid, basis(0), "enrol")
+    rig = Rig(store=store)
+    try:
+        rig.detector.script = [[Detection(*BOX, 0.93, "cup", 41)]]
+        frame = textured_frame([(*BOX, GREEN)])
+        events = rig.run_frames(frame, 4)
+        assert any(event.kind == "announce" and event.text.startswith("Blue mug,") for event in events)
+        assert all(not (event.kind == "announce" and event.text.startswith("Cup,")) for event in events)
+    finally:
+        rig.close()
+
+
+def test_find_command_accepts_pretrained_category_name(rig):
+    rig.detector.class_names = ["cup"]
+    rig.pipe.handle_text("find a cup")
+    assert rig.pipe.state.target == "cup"
+
+
 def test_embedding_is_computed_once_per_track_not_per_frame(rig):
     rig.enrol("keys", basis(0))
     rig.run_frames(textured_frame([(*BOX, GREEN)]), 12)

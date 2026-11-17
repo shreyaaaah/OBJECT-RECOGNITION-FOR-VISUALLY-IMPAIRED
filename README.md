@@ -19,15 +19,16 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 
 | Item | Status |
 |---|---|
-| Unit + behavioural tests (`pytest`, 256 collected, no camera/GPU/mic/model/network) | **Passing before category-label integration** — integration still needs verification |
+| Unit + behavioural tests (`pytest`, 260 collected; hardware-independent) | **Passing [THIS MACHINE]** — all 260 passed after category-label integration |
+| Real pretrained category detection | **Verified [THIS MACHINE]** — local YOLOv8n weights detected 6 labeled objects in Ultralytics' `bus.jpg` sample (`bus`, `person`, `stop sign`); this is a smoke check, not an accuracy evaluation |
 | CLI benchmark — synthetic stub (pipeline overhead only) | **Passing [THIS MACHINE]** — 1020 FPS overhead-only, clearly labelled SYNTHETIC |
 | CLI benchmark — real YOLOv8n + real DINOv2 ViT-S/14 weights | **Measured [THIS MACHINE]** — see table below |
 | YOLOv8n weights (`yolov8n.pt`, 6.2 MB) | **Downloaded [THIS MACHINE]** via Ultralytics; cached in `fewshot_vi/` |
 | DINOv2 ViT-S/14 weights (~330 MB) | **Downloaded [THIS MACHINE]** via `torch.hub`; cached at `C:\Users\LENOVO\.cache\torch\hub\` |
 | DINOv2 loads and runs a forward pass | **Verified [THIS MACHINE]** — 22 M parameters, forward pass runs on CPU |
-| Any real-dataset accuracy / ablation result | **NOT produced.** No personal-object dataset was provided. See the eval section for dataset layout requirements. |
+| Real-world accuracy / dataset evaluation | **NOT produced.** The sample-image smoke check confirms labels flow through the detector, not accuracy. No representative evaluation dataset was supplied. |
 | CUDA / FP16 / MPS paths | **Not verified** (AMD Radeon 610M has no PyTorch backend; CPU-only). Device selection logic is unit-tested with mocks. |
-| Real camera live loop | **Historical baseline before category-label integration** — `python run.py --mode live --keyboard-only --max-frames 60` ran 60 frames from camera 0, **0 errors, 12.0 FPS rolling**, 92.9 ms mean total/frame, 185.8 ms mean detect (p95 266.9 ms). Updated category speech has not been verified on-camera yet. |
+| Real camera live loop | **Not verified for this final integration.** Camera 0 could not be opened in the current execution environment. An earlier baseline run processed 60 frames at 12.0 FPS before category-label speech was integrated. |
 | Microphone STT (faster-whisper / sounddevice) | **Not verified** — optional packages not installed; falls back to keyboard input (logged, not silent). |
 | pyttsx3 speech output | **Installed and importable [THIS MACHINE]**; actual audio playback not verified headlessly. |
 | CLIP scene labels, MediaPipe hands | **Not installed** (optional). Disabled with logged warning; system continues without them. |
@@ -270,6 +271,7 @@ Everything runs locally. No image, audio or text is uploaded or sent for remote 
 
 * Not tuned or validated on real data; see the verification table. No claim is made about real-world accuracy.
 * CPU-only throughput is limited by embedding (see measurements); a GPU path exists but is unmeasured.
+* Distance is estimated from apparent box width and one configured object width, so it is a rough cue rather than calibrated range measurement. The project is not certified as a mobility or obstacle-avoidance device.
 * **Implemented differently from the original plan:** tracker is a self-contained IoU tracker with velocity prediction (not ByteTrack). **Not implemented:** the optional depth model (`features.depth_model: true` is rejected by config validation; distance uses the box-size heuristic with a default 8 cm object width, so it is rough for objects of other sizes) and per-object threshold calibration.
 * Look-alike re-ranking only runs for objects explicitly marked as confusers. A re-rank that misses its deadline is ignored (the provisional result stands) until the track is next re-embedded.
 * Gallery updates and sightings use separate bounded writer queues; if the gallery-update queue is full, that update attempt is skipped without slowing frame processing.
