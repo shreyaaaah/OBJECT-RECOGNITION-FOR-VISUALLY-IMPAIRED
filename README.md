@@ -1,9 +1,10 @@
-# Real-Time Assistive Object Recognition with Optional Few-Shot Personalization
+# Few-Shot Computer Vision for Real-Time Assistive Object Recognition
 
-A local, privacy-preserving assistive app. It recognizes supported pretrained object categories automatically;
-no enrollment or user dataset is needed for those categories. Users can optionally add 3-5 views of a personal
-item (such as keys or a medicine box) when they want a name beyond the detector's standard categories. It speaks
-guidance such as *"Cup, slightly left, about one metre."*
+A local, privacy-preserving computer-vision project for assistive object recognition. Its vision pipeline uses
+YOLO object detection, DINOv2 visual embeddings, few-shot gallery matching, object tracking, and temporal
+confirmation. Supported pretrained categories work without enrollment; a small number of personal items can be
+added from 3-5 examples each. Speech provides the result and spatial guidance, for example *"Cup, slightly left,
+about one metre."* No model is trained from scratch.
 
 Optional personalization features beyond automatic category recognition:
 

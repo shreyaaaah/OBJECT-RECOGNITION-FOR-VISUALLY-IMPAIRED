@@ -55,11 +55,15 @@ class YoloDetector(Detector):
             return []
         xyxy = boxes.xyxy.cpu().numpy()
         conf = boxes.conf.cpu().numpy()
-        class_ids = boxes.cls.cpu().numpy().astype(int)
+        raw_class_ids = getattr(boxes, "cls", None)
+        class_ids = None if raw_class_ids is None else raw_class_ids.cpu().numpy().astype(int)
         order = np.argsort(-conf)[: self.max_objects]
-        names = model.names
+        names = getattr(model, "names", {})
         detections = []
         for i in order:
+            if class_ids is None:
+                detections.append(Detection(*map(float, xyxy[i]), float(conf[i])))
+                continue
             class_id = int(class_ids[i])
             name = names.get(class_id, str(class_id)) if isinstance(names, dict) else names[class_id]
             detections.append(Detection(*map(float, xyxy[i]), float(conf[i]), str(name), class_id))

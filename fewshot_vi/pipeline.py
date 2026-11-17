@@ -191,6 +191,8 @@ class Pipeline:
         categories = getattr(self.detector, "class_names", [])
         cmd = parse_command(text, list(dict.fromkeys(names + categories)), self.cfg.voice.fuzzy_cutoff)
         I = Intent
+        if cmd.intent in (I.DELETE, I.CONFUSER) and cmd.name not in names:
+            cmd.name = None  # categories can be found, but are not gallery entries to delete/link
         if self._pending_delete is not None:
             name, t0 = self._pending_delete
             self._pending_delete = None
@@ -208,7 +210,7 @@ class Pipeline:
             self.say("Identifying.")
         elif cmd.intent == I.FIND:
             self.state.set_mode(Mode.FIND, cmd.name, now=self.clock())
-            self.say(f"Looking for your {cmd.name}.")
+            self.say(f"Looking for {cmd.name}.")
         elif cmd.intent == I.MEMORY_QUERY:
             if cmd.name not in self.store.names():
                 self.say(f"I can identify {cmd.name} while it is visible, but I need it in your personal gallery "

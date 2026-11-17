@@ -126,8 +126,7 @@ class GuidanceEngine:
         for t in tracks:
             if not t.smoothed_name:
                 continue
-            key = (f"{t.smoothed_name.lower()}:{t.track_id}" if t.class_name is not None
-                   else t.smoothed_name.lower())
+            key = t.smoothed_name.lower()
             last = self._announced.get(key)
             if last is not None and now - last < gcfg.announce_cooldown_s:
                 continue
