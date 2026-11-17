@@ -17,7 +17,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 
@@ -202,6 +202,48 @@ class GalleryStore:
             self.sources.append(source)
             self.dim = self.E.shape[1]
             return int(cur.lastrowid)
+
+    def add_embeddings_batch(self, object_id: int,
+                             embeddings: Sequence[tuple[np.ndarray, Optional[np.ndarray]]],
+                             source: str = "enrol") -> int:
+        """Atomically add a set of embeddings to an existing gallery class."""
+        if source not in ("enrol", "auto"):
+            raise GalleryError("source must be 'enrol' or 'auto'")
+        if source == "auto" and any(p is not None for _, p in embeddings):
+            raise GalleryError("auto embeddings must not store patch tokens")
+        prepared = []
+        for cls, patches in embeddings:
+            vector = _l2(np.asarray(cls, dtype=np.float32).ravel())
+            if vector.shape[0] != self.dim:
+                raise GalleryError(f"embedding dim {vector.shape[0]} != gallery dim {self.dim}")
+            blob_p = None
+            if patches is not None:
+                p = np.asarray(patches, dtype=np.float32)
+                if p.ndim != 2 or p.shape[1] != self.dim:
+                    raise GalleryError("patch embeddings must have shape (tokens, gallery_dim)")
+                if p.shape[0] > self.top_patches:
+                    idx = np.sort(np.argsort(-np.linalg.norm(p, axis=1))[:self.top_patches])
+                    p = p[idx]
+                blob_p = np.ascontiguousarray(p).tobytes()
+            prepared.append((vector, blob_p))
+        if not prepared:
+            return 0
+        with self._lock:
+            if self.get_name(object_id) is None:
+                raise GalleryError(f"unknown object id {object_id}")
+            now = time.time()
+            try:
+                self._db.executemany(
+                    "INSERT INTO embeddings(object_id, cls_blob, patches_blob, source, created_at) "
+                    "VALUES(?,?,?,?,?)",
+                    [(object_id, vec.tobytes(), patch_blob, source, now)
+                     for vec, patch_blob in prepared])
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+            self._reload()
+            return len(prepared)
 
     def delete_embedding(self, emb_id: int, allow_enrol: bool = False) -> bool:
         """Delete one embedding. ``'enrol'`` rows are protected unless ``allow_enrol``."""

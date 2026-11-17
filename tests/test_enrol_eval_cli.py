@@ -86,6 +86,33 @@ def test_enrolment_saves_views_with_augmentations_and_patches_only_for_enrol():
     assert any("Rotate it slowly" in s for s in e.said) and "Hold the object steadily" in e.said[0]
 
 
+def test_photo_enrolment_appends_few_shot_examples_to_existing_class_atomically(tmp_path):
+    folder = tmp_path / "mobile_examples"
+    folder.mkdir()
+    for i in range(3):
+        assert cv2.imwrite(str(folder / f"view_{i}.jpg"), SHARP)
+
+    store = GalleryStore(":memory:", dim=DIM)
+    cfg = enrol_cfg()
+    first = en.run_image_enrolment(image_dir=folder, name="mobile", confirmed=True,
+                                   cfg=cfg, store=store, embedder=ViewEmbedder())
+    assert first.success and first.views == 3
+    object_id = store.get_id("mobile")
+    before = store.count(object_id, "enrol")
+    assert before == first.embeddings
+
+    duplicate = en.run_image_enrolment(image_dir=folder, name="mobile", confirmed=True,
+                                       cfg=cfg, store=store, embedder=ViewEmbedder())
+    assert not duplicate.success and store.count(object_id, "enrol") == before
+
+    appended = en.run_image_enrolment(image_dir=folder, name="MOBILE", confirmed=True,
+                                      cfg=cfg, store=store, embedder=ViewEmbedder(), append_shots=True)
+    assert appended.success and appended.views == 3
+    assert store.get_id("mobile") == object_id
+    assert store.count(object_id, "enrol") == before + appended.embeddings
+    store.close()
+
+
 def test_blurred_views_rejected_with_spoken_hint_then_good_views_accepted():
     e = Env([BLURRY] * 12 + [SHARP], ["keys", "yes"])
     r = e.run()
@@ -374,6 +401,22 @@ def test_cli_eval_ablation_end_to_end(tmp_path, capsys):
                          "--out", str(out)])
     txt = capsys.readouterr().out
     assert code == 0 and out.exists() and "== ablation 5 sequential self-update ==" in txt and "NOT DINOv2" in txt
+
+
+def test_tts_test_cli_checks_speech_without_opening_camera(monkeypatch, capsys):
+    from fewshot_vi.voice import tts
+
+    class TestBackend(tts.TTSBackend):
+        name = "test-audio"
+
+        def speak(self, text):
+            self.text = text
+
+    backend = TestBackend()
+    monkeypatch.setattr(tts, "make_backend", lambda: backend)
+    assert run_cli.main(["--mode", "tts-test"]) == 0
+    assert "test-audio" in capsys.readouterr().out
+    assert backend.text.startswith("Speech test.")
 
 
 def test_cli_benchmark_synthetic(capsys):

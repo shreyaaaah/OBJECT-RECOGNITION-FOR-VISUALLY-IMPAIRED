@@ -172,6 +172,39 @@ class GateBackend(tts.TTSBackend):
         self.release.set()
 
 
+class WorkerThreadBackend(tts.TTSBackend):
+    """Models Windows SAPI's requirement that init/use/cleanup share a thread."""
+    name = "worker-test"
+    thread_affine = True
+
+    def __init__(self):
+        self.started_on = self.spoken_on = self.closed_on = None
+        self.spoken = []
+
+    def start_worker(self):
+        self.started_on = threading.get_ident()
+
+    def speak(self, text):
+        assert threading.get_ident() == self.started_on
+        self.spoken_on = threading.get_ident()
+        self.spoken.append(text)
+
+    def close_worker(self):
+        self.closed_on = threading.get_ident()
+
+
+def test_thread_affine_tts_backend_initialises_speaks_and_closes_on_worker():
+    be = WorkerThreadBackend()
+    sp = tts.Speaker(be)
+    caller_thread = threading.get_ident()
+    assert sp.say("few-shot voice test", 40)
+    assert sp.wait_idle(2)
+    sp.close()
+    assert be.spoken == ["few-shot voice test"]
+    assert be.started_on == be.spoken_on == be.closed_on
+    assert be.started_on != caller_thread
+
+
 def test_say_never_blocks_the_caller():
     be = GateBackend()
     sp = tts.Speaker(be)
@@ -271,15 +304,8 @@ def test_console_fallback_prints(capsys):
     assert "[speech] hi" in capsys.readouterr().out
 
 
-def test_make_backend_falls_back_to_console_when_engine_missing(monkeypatch):
-    import builtins
-    real = builtins.__import__
-
-    def fake(name, *a, **k):
-        if name == "pyttsx3":
-            raise ImportError("no pyttsx3")
-        return real(name, *a, **k)
-    monkeypatch.setattr(builtins, "__import__", fake)
+def test_make_backend_falls_back_to_console_when_windows_speech_is_unavailable(monkeypatch):
+    monkeypatch.setattr(tts.shutil, "which", lambda _: None)
     assert tts.make_backend().name == "console"
 
 

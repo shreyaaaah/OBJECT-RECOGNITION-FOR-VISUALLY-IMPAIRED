@@ -299,12 +299,12 @@ def run_enrolment(*, cfg, store: GalleryStore, detector, embedder,
 
 
 def run_image_enrolment(*, image_dir: str | Path, name: str, confirmed: bool,
-                        cfg, store: GalleryStore, embedder) -> EnrolResult:
-    """Enroll a personal object from 3-5 pre-cropped image files, without a camera.
+                        cfg, store: GalleryStore, embedder, append_shots: bool = False) -> EnrolResult:
+    """Enroll 3-5 few-shot examples for a class, without a camera.
 
-    Each image must be a sharp crop of the same physical object. This bypasses
-    the live detector during enrollment; live recognition still needs a detector
-    proposal for the object in the camera frame.
+    Photos may show different instances of one class. With ``append_shots``,
+    their embeddings are added atomically to an existing class. This bypasses
+    detection during enrollment; live use still needs a detector box proposal.
     """
     res = EnrolResult(False, "")
     folder = Path(image_dir)
@@ -321,7 +321,9 @@ def run_image_enrolment(*, image_dir: str | Path, name: str, confirmed: bool,
     if not clean_name:
         res.message = "Object name must not be empty. Nothing was saved."
         return res
-    if any(clean_name.casefold() == existing.casefold() for existing in store.names()):
+    existing_name = next((existing for existing in store.names()
+                          if clean_name.casefold() == existing.casefold()), None)
+    if existing_name is not None and not append_shots:
         res.message = f"An object called {clean_name!r} already exists. Nothing was saved."
         return res
     if not confirmed:
@@ -347,19 +349,21 @@ def run_image_enrolment(*, image_dir: str | Path, name: str, confirmed: bool,
             return res
         embedded_views.append((cls, patches))
 
-    object_id = None
+    object_id = store.get_id(existing_name) if existing_name is not None else None
+    created_object = False
     try:
-        object_id = store.add_object(clean_name)
-        embedding_count = 0
+        if object_id is None:
+            object_id = store.add_object(clean_name)
+            created_object = True
+        batch = []
         for cls, patches in embedded_views:
             for i in range(cls.shape[0]):
-                store.add_embedding(object_id, cls[i], "enrol",
-                                    patches=select_salient(patches[i], cfg.rerank.top_patches))
-                embedding_count += 1
+                batch.append((cls[i], select_salient(patches[i], cfg.rerank.top_patches)))
+        embedding_count = store.add_embeddings_batch(object_id, batch, "enrol")
     except Exception as exc:  # noqa: BLE001 - avoid partial silent enrollment
-        # Only remove the object if this invocation created it. In particular,
-        # never delete a pre-existing object after a duplicate-name error.
-        if object_id is not None:
+        # Remove only the empty class created by this invocation. Appended shots
+        # are inserted in one SQLite transaction and cannot partially apply.
+        if created_object and object_id is not None:
             store.delete_object(clean_name)
         res.message = f"Could not save {clean_name}: {exc}. Nothing was saved."
         return res
@@ -368,5 +372,6 @@ def run_image_enrolment(*, image_dir: str | Path, name: str, confirmed: bool,
     res.name = clean_name
     res.views = len(paths)
     res.embeddings = embedding_count
-    res.message = f"Saved {clean_name} from {res.views} image views ({embedding_count} embeddings)."
+    action = "Added" if existing_name is not None else "Saved"
+    res.message = f"{action} {res.views} few-shot examples to {clean_name} ({embedding_count} embeddings)."
     return res

@@ -58,7 +58,7 @@ class GuidanceEngine:
         UNKNOWN tracks are ignored so random background objects never trigger hints."""
         best, best_area = None, -1.0
         for t in tracks:
-            if t.class_name is not None:
+            if t.class_name is not None and self.cfg.features.category_fallback:
                 continue  # a general category is already available; no gallery re-view hint needed
             if t.smoothed_name is not None:
                 continue

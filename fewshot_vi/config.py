@@ -16,7 +16,7 @@ import yaml
 DEFAULTS: dict[str, dict[str, Any]] = {
     "camera": {"index": 0, "width": 640, "height": 480, "target_fps": 30},
     "detector": {"backend": "yolo", "weights": "yolov8n.pt", "conf": 0.25,
-                 "detect_every_n_frames": 2, "max_objects": 10, "imgsz": 640},
+                 "category_min_conf": 0.45, "detect_every_n_frames": 2, "max_objects": 10, "imgsz": 640},
     "embedder": {"model": "dinov2_vits14", "input_size": 224, "fp16": True},
     "matching": {"accept_sim": 0.70, "ambiguous_sim": 0.55, "min_margin": 0.08, "knn_k": 3},
     "temporal": {"window": 7, "min_votes": 4},
@@ -26,7 +26,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "guidance": {"hint_cooldown_s": 4, "announce_cooldown_s": 3,
                  "known_object_width_cm_default": 8, "camera_hfov_deg": 65},
     "memory": {"min_conf_to_log": 0.80, "log_cooldown_s": 10, "scene_every_n_s": 5},
-    "features": {"self_improve": True, "active_hints": True, "memory": True,
+    "features": {"self_improve": True, "active_hints": True, "memory": True, "category_fallback": False,
                  "patch_rerank": True, "hand_guidance": False, "depth_model": False},
     "tracker": {"reembed_iou": 0.6, "reembed_every_frames": 30, "match_iou": 0.3,
                 "max_missed_frames": 10},
@@ -48,7 +48,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 _RANGES: dict[tuple[str, str], tuple[float | None, float | None]] = {
     ("camera", "width"): (16, None), ("camera", "height"): (16, None),
     ("camera", "target_fps"): (1, 240),
-    ("detector", "conf"): (0.0, 1.0), ("detector", "detect_every_n_frames"): (1, None),
+    ("detector", "conf"): (0.0, 1.0), ("detector", "category_min_conf"): (0.0, 1.0),
+    ("detector", "detect_every_n_frames"): (1, None),
     ("detector", "max_objects"): (1, None),
     ("detector", "imgsz"): (32, None),
     ("embedder", "input_size"): (14, None),

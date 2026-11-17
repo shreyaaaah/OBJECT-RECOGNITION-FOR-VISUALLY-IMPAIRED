@@ -99,9 +99,10 @@ def test_unknown_object_is_never_named(rig):
     assert tr.match.decision == Decision.UNKNOWN and tr.smoothed_name is None
 
 
-def test_supported_detector_category_is_announced_without_gallery_or_dino(rig):
+def test_optional_category_fallback_is_announced_without_gallery_or_dino(rig):
     from fewshot_vi.types import Detection
 
+    rig.pipe.cfg = make_cfg(features={"category_fallback": True})
     rig.detector.class_names = ["cup"]
     rig.detector.script = [[Detection(*BOX, 0.93, "cup", 41)]]
     frame = textured_frame([(*BOX, GREEN)])
@@ -111,6 +112,38 @@ def test_supported_detector_category_is_announced_without_gallery_or_dino(rig):
         "Cup, slightly left, about half a metre."
     ]
     assert rig.embedder.calls == 0 and rig.store.names() == []
+
+
+def test_detector_proposal_is_not_named_by_default(rig):
+    from fewshot_vi.types import Detection
+
+    rig.detector.class_names = ["cell phone"]
+    rig.detector.script = [[Detection(*BOX, 0.93, "cell phone", 67)]]
+    frame = textured_frame([(*BOX, GREEN)])
+    events = rig.run_frames(frame, 5)
+    assert all(event.kind != "announce" for event in events)
+    assert rig.pipe.tracker.active()[0].smoothed_name is None
+    assert rig.embedder.calls == 0 and rig.store.names() == []
+
+
+def test_optional_category_fallback_waits_for_a_stable_same_class_streak():
+    from fewshot_vi.types import Detection
+
+    rig = Rig(cfg=make_cfg(features={"category_fallback": True}), script=[
+        [Detection(*BOX, 0.95, "toothbrush", 85)],
+        [Detection(*BOX, 0.95, "person", 0)],
+        [Detection(*BOX, 0.95, "person", 0)],
+    ])
+    try:
+        frame = textured_frame([(*BOX, GREEN)])
+        assert rig.run_frames(frame, 1) == []
+        assert rig.run_frames(frame, 1) == []
+        events = rig.run_frames(frame, 1)
+        assert [event.text for event in events if event.kind == "announce"] == [
+            "Person, slightly left, about half a metre."
+        ]
+    finally:
+        rig.close()
 
 
 def test_personal_gallery_match_takes_precedence_over_detector_category():
@@ -131,9 +164,16 @@ def test_personal_gallery_match_takes_precedence_over_detector_category():
 
 
 def test_find_command_accepts_pretrained_category_name(rig):
+    rig.pipe.cfg = make_cfg(features={"category_fallback": True})
     rig.detector.class_names = ["cup"]
     rig.pipe.handle_text("find a cup")
     assert rig.pipe.state.target == "cup"
+
+
+def test_find_command_does_not_treat_raw_detector_labels_as_learned_classes(rig):
+    rig.detector.class_names = ["cup"]
+    rig.pipe.handle_text("find a cup")
+    assert rig.pipe.state.target is None
 
 
 def test_embedding_is_computed_once_per_track_not_per_frame(rig):
@@ -356,7 +396,8 @@ def test_list_objects(rig):
     rig.enrol("wallet", basis(1))
     rig.pipe.handle_text("list objects")
     said = rig.said()
-    assert "You have no objects yet." in said and "You have keys, wallet." in said
+    assert "You have no few-shot classes enrolled yet. Add a few examples for each class." in said
+    assert "You have keys, wallet." in said
 
 
 def test_delete_requires_confirmation(rig):

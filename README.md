@@ -1,12 +1,20 @@
 # Few-Shot Computer Vision for Real-Time Assistive Object Recognition
 
-A local, privacy-preserving computer-vision project for assistive object recognition. Its vision pipeline uses
-YOLO object detection, DINOv2 visual embeddings, few-shot gallery matching, object tracking, and temporal
-confirmation. Supported pretrained categories work without enrollment; a small number of personal items can be
-added from 3-5 examples each. Speech provides the result and spatial guidance, for example *"Cup, slightly left,
-about one metre."* No model is trained from scratch.
+A local, privacy-preserving **few-shot computer-vision system** for assistive object recognition. YOLO proposes
+object regions; DINOv2 compares each region against a small gallery of example photos you provide. By default,
+the app speaks only a stable, accepted match to one of those learned classes. If an object does not match the
+gallery strongly enough, it is reported as unknown instead of being named directly from YOLO's generic COCO
+label. A mistaken embedding match is still possible until thresholds are calibrated. For example, `cell phone`
+on the debug overlay is only YOLO's proposal label; it is not a few-shot recognition result. No model is trained
+from scratch.
 
-Optional personalization features beyond automatic category recognition:
+The project-specific behaviour is open-set few-shot recognition: add a class from a handful of examples, attempt
+to recognize other instances of that class, reject low-confidence matches, and provide stable direction and
+distance guidance. Multiple physical objects can be represented by the same broad class (for example, several
+different mobile phones). The optional `features.category_fallback` setting enables generic pretrained YOLO
+category announcements for comparison, but it is off by default.
+
+Additional system features:
 
 1. **Active re-view** - low-quality or ambiguous views produce one concise hint ("Hold the camera steady.", "Move closer.", "Move the camera left.", "Not sure. Try a different angle.").
 2. **Object memory** - confident sightings of enrolled personal objects are logged (time, bounding box, CLIP scene label) so "Where did I leave my keys?" works for objects not in view.
@@ -19,7 +27,7 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 
 | Item | Status |
 |---|---|
-| Unit + behavioural tests (`pytest`, 260 collected; hardware-independent) | **Passing [THIS MACHINE]** — all 260 passed after category-label integration |
+| Unit + behavioural tests (`pytest`; hardware-independent) | **Passing [THIS MACHINE]** — 266 passed after few-shot and TTS integration changes |
 | Real pretrained category detection | **Verified [THIS MACHINE]** — local YOLOv8n weights detected 6 labeled objects in Ultralytics' `bus.jpg` sample (`bus`, `person`, `stop sign`); this is a smoke check, not an accuracy evaluation |
 | CLI benchmark — synthetic stub (pipeline overhead only) | **Passing [THIS MACHINE]** — 1020 FPS overhead-only, clearly labelled SYNTHETIC |
 | CLI benchmark — real YOLOv8n + real DINOv2 ViT-S/14 weights | **Measured [THIS MACHINE]** — see table below |
@@ -30,7 +38,7 @@ Sections marked **[BUILD ENV]** were verified in the original Linux build enviro
 | CUDA / FP16 / MPS paths | **Not verified** (AMD Radeon 610M has no PyTorch backend; CPU-only). Device selection logic is unit-tested with mocks. |
 | Real camera live loop | **Not verified for this final integration.** Camera 0 could not be opened in the current execution environment. An earlier baseline run processed 60 frames at 12.0 FPS before category-label speech was integrated. |
 | Microphone STT (faster-whisper / sounddevice) | **Not verified** — optional packages not installed; falls back to keyboard input (logged, not silent). |
-| pyttsx3 speech output | **Installed and importable [THIS MACHINE]**; actual audio playback not verified headlessly. |
+| Windows speech backend | **Runtime check passed [THIS MACHINE]** — the camera-free `tts-test` completed with Windows System.Speech; only a person can confirm the sound was audible from the selected speaker. |
 | CLIP scene labels, MediaPipe hands | **Not installed** (optional). Disabled with logged warning; system continues without them. |
 | Target: ≥ 15 FPS end to end | **Not met on this CPU** — static-scene (embeddings cached): **9.8 FPS**; stress (re-embed every frame): **1.8 FPS**. See table. |
 | Target: < 150 ms recognition → speech | **Not verified** end-to-end; software enqueue path is < 1 ms (stub models); real DINOv2 embed adds 218–930 ms per frame on this CPU. |
@@ -61,7 +69,7 @@ Command: `python run.py --mode benchmark` (real YOLOv8n + real DINOv2 ViT-S/14 p
 | Guidance latency | 0.01 ms |
 | Recognition events | None (gallery empty — expected) |
 | Camera | Index 0, 480×640 |
-| TTS | pyttsx3 (Windows SAPI) initialised, beeps disabled (sounddevice not installed) |
+| TTS | Previous camera run preceded the Windows System.Speech integration; the new backend is verified separately with `--mode tts-test` |
 | Scene classifier | Disabled (open_clip not installed) |
 
 **Reading it honestly:** The embedder is the bottleneck. At the default input size, the 15 FPS target is not met on this CPU. This machine's AMD Radeon 610M is not exposed to PyTorch, which selected CPU; GPU performance has not been measured.
@@ -144,10 +152,9 @@ After the first run everything works offline.
 
 ## What you need to provide manually
 
-* **General category recognition needs no enrollment or user dataset.** The app uses the category labels from pretrained YOLO weights, and speaks the supported category when it appears. Multiple items of the same class are all announced as that class.
-* **Personal names are optional.** To identify a particular item outside the detector's categories (for example, your own keys), use guided enrollment or import 3-5 sharp photos. This adds an optional personalized match; it is not required for general category recognition.
-* **Model weights are required.** With internet access, the first run downloads `yolov8n.pt`. DINOv2 weights are needed only when using personal gallery matching, guided enrollment, or DINO evaluation. The app does not silently substitute random weights.
-* **The supported categories are limited to those in the detector's pretrained model.** Common objects are recognized by category; uncommon items such as loose keys may not have a category label. Optional personal enrollment can provide a custom name when the detector proposes a box for the item.
+* **Examples are required for the default few-shot recognition.** Add 3-5 sharp photos for each class you want the DINOv2 gallery to recognize. Photos may show different real-world instances of that same broad class; the system is not limited to one particular cup or phone.
+* **The detector still proposes the image region.** The shipped `yolov8n.pt` detector is pretrained on COCO. A support gallery does not retrain or replace that detector; if it produces no box for an object, the recognizer has no crop to compare. The displayed `[cell phone]`, `[person]`, etc. text is a detector proposal for debugging and is not spoken by default.
+* **Model weights are required.** With internet access, the first run downloads `yolov8n.pt` and DINOv2 weights when a non-empty few-shot gallery is used. The app does not silently substitute random weights.
 * **A dataset is only needed for evaluation and threshold calibration.** Create folders such as `DATA/keys/*.jpg`, `DATA/wallet/*.jpg`, with each image showing one object crop and the folder name as its class. The default full evaluation over 1/3/5-shot episodes needs at least 8 classes: 5 classes with at least 10 images each, and 3 additional classes with at least 5 images each. You can lower `--n-way`, `--n-unknown`, `--n-query`, and `--k-shot` for a smaller dataset. Do not use enrollment photos as both support and query images; the evaluator samples disjoint images within each episode.
 * **Microphone, speaker, and GPU are hardware checks you must do on the target PC.** The application has keyboard and console fallbacks, but those fallbacks are not spoken guidance. Run `python run.py --mode benchmark` after installing weights to measure that machine; synthetic benchmark numbers do not measure DINOv2 or the camera.
 
@@ -160,8 +167,10 @@ python run.py --mode live                       # camera 0, microphone if availa
 python run.py --mode live --show                # + debug overlay (boxes, ids, scores, FPS, timings)
 python run.py --mode live --camera clip.mp4     # video file instead of a camera
 python run.py --mode live --keyboard-only       # never touch the microphone
-python run.py --mode enrol                      # optional: add a personal object
-python run.py --mode enrol --images photos\mug --name "blue mug"  # import 3-5 photos; no camera
+python run.py --mode tts-test                   # test speaker output; no camera or microphone
+python run.py --mode enrol                      # guided, camera-based example collection
+python run.py --mode enrol --images photos\mobile --name "mobile phone"  # 3-5 examples; no camera
+python run.py --mode enrol --images photos\mobile_more --name "mobile phone" --append-shots  # add examples
 python run.py --mode eval --ablation --dataset DATA --embedder dino --out results/ablation.csv
 python run.py --mode benchmark                  # real detector + DINOv2 if loadable; reports NOT MEASURED otherwise
 python run.py --mode benchmark --synthetic      # pipeline overhead only (stub models, clearly labelled)
@@ -172,24 +181,24 @@ Exit codes: 0 ok, 1 runtime failure (camera, enrolment), 2 usage/config/dataset 
 
 ### Keyboard fallback
 
-If no microphone (or `faster-whisper`/`sounddevice`) is usable, the app logs a warning and reads typed commands at a `>` prompt. Enrolment questions ("What should I call this object?") are answered the same way. Speech output falls back to printing `[speech] ...` lines if `pyttsx3` is unavailable. Beeps are silently disabled if there is no audio output.
+`--keyboard-only` disables microphone input only; it does not disable speaking. If there is no usable microphone (or `faster-whisper`/`sounddevice`), the app reads typed commands at a `>` prompt. On Windows, speech uses the built-in offline `System.Speech` voice through a persistent PowerShell worker; elsewhere it uses offline `pyttsx3`. If the backend cannot initialise or speak, the app prints `[speech] ...` and logs that no audio will play. Run `python run.py --mode tts-test` and listen for the test sentence to check the actual speaker path before using live mode. Beeps are disabled if there is no audio output.
 
 ### Voice / typed commands
 
 | Say | Effect |
 |---|---|
-| what is this / identify | Announces visible supported categories and any confidently matched personal objects |
-| find a cup / find my X / where is X | FIND mode: follows the requested category or personal name; direction + approximate distance + stereo beeps |
+| what is this / identify | Announces visible classes only after a stable few-shot gallery match |
+| find my X / find X | FIND mode: follows an enrolled class; direction + approximate distance + stereo beeps |
 | where did I leave my X | Memory answer for enrolled personal items: "Your keys were last seen 12 minutes ago, on the desk." |
 | register object / add object | Guided enrolment |
 | delete X / forget X | Asks for a spoken "yes" before deleting |
-| list objects | Lists enrolled personal objects; category detection works without a gallery |
+| list objects | Lists few-shot classes learned from example photos |
 | stop / quiet, resume | Mute / unmute guidance |
 | this is similar to X | Marks the most recently enrolled object as a look-alike of X |
 
 Names are fuzzy-matched against the gallery, and misspelled verbs are corrected.
 
-### Optional personal-object enrollment (`--mode enrol` or "register object")
+### Few-shot class enrollment (`--mode enrol` or "register object")
 
 1. Hold the object steadily; a large, central, stable detection is selected. If no usable boxes appear, enrollment gives a spoken hint and the final error reports proposal/quality counts. YOLOv8n may not propose small or uncommon personal items.
 2. 3-5 quality-approved views are captured within 30 s ("Rotate it slowly."). Blurred, edge-cut, too-small and near-duplicate views are rejected with a spoken hint.
@@ -199,25 +208,26 @@ Names are fuzzy-matched against the gallery, and misspelled verbs are corrected.
 
 ### Photo-folder enrolment (camera-free)
 
-If camera-guided enrolment cannot get stable boxes, put 3-5 sharp photos of one object in a folder. Use different angles and lighting, keep the whole object visible, and avoid backgrounds dominated by other objects. These photos are embedded locally; they are not uploaded and do not train or fine-tune DINOv2.
+If camera-guided enrollment cannot get stable boxes, put 3-5 sharp photos for one class in a folder. They can show different physical examples of the same broad class; include different angles and lighting, keep the object visible, and avoid backgrounds dominated by unrelated objects. These photos are embedded locally; they are not uploaded and do not train or fine-tune DINOv2. Add further 3-5 photo batches with `--append-shots`.
 
 ```powershell
-python run.py --mode enrol --images .\photos\blue_mug --name "blue mug"
+python run.py --mode enrol --images .\photos\mobile --name "mobile phone"
+python run.py --mode enrol --images .\photos\more_mobiles --name "mobile phone" --append-shots
 ```
 
-The application asks you to confirm before saving the examples to the same gallery used by live mode. This bypasses detection only while adding the reference photos. During live recognition YOLO still has to propose a box around the object; the photo import cannot make YOLO detect an object it misses.
+The application asks you to confirm before saving the examples to the same gallery used by live mode. This bypasses detection only while adding the reference photos. During live recognition YOLO still has to propose a box around the object; the photo import cannot make YOLO detect an object it misses. For custom classes, a DINOv2 gallery match supplies the spoken class name even if YOLO's proposal label is wrong.
 
 ## How it works
 
 ```
 Camera thread (Queue(2), drop-oldest)
-  -> detect every N frames (YOLO boxes + pretrained category labels) / IoU tracker predicts on skipped frames
-  -> announce stable category labels directly; if a personal gallery exists, embed new tracks in one DINOv2 batch
-  -> optional matcher: cosine vs personal gallery -> ACCEPT / AMBIGUOUS / UNKNOWN; accepted personal name takes precedence
+  -> detect every N frames (YOLO region proposals) / IoU tracker predicts on skipped frames
+  -> with an enrolled gallery, batch new crops through DINOv2 and compare to example embeddings
+  -> matcher: cosine vs few-shot gallery -> ACCEPT / AMBIGUOUS / UNKNOWN; only a temporally confirmed ACCEPT is named
        AMBIGUOUS between marked look-alikes -> async patch re-rank worker (deadline-bound)
-  -> temporal vote (window/min_votes) -> stable detector categories or SMOOTHED personal matches may be named
+  -> temporal vote (window/min_votes) -> reject flicker and require stable few-shot matches
   -> quality (blur, edge-cut, size, margin) -> active hints / gallery-update queue / sighting writer queue
-  -> guidance engine -> prioritised, interruptible TTS thread + stereo beeps
+  -> guidance engine -> priority-ordered TTS worker + stereo beeps (speech already in progress finishes first)
 Voice thread: STT or keyboard -> intent parser -> AppState (thread-safe) -> vision loop
 ```
 
@@ -232,7 +242,7 @@ Safe updates add an `auto` embedding only if: smoothed ACCEPT for a full tempora
 Validated on load (unknown keys, wrong types, out-of-range values and inconsistent combinations are rejected). Sections:
 
 * `camera` - index, width, height, target_fps.
-* `detector` - backend (`yolo`), weights, conf, detect_every_n_frames, max_objects, `imgsz` (YOLO input resolution; smaller can improve CPU speed while reducing small-object recall).
+* `detector` - backend (`yolo`), weights, proposal conf, optional fallback `category_min_conf`, detect_every_n_frames, max_objects, `imgsz` (YOLO input resolution; smaller can improve CPU speed while reducing small-object recall).
 * `embedder` - model (`dinov2_vits14`), input_size, fp16 (applied on CUDA only).
 * `matching` - accept_sim, ambiguous_sim, min_margin, knn_k.
 * `temporal` - window, min_votes.
@@ -240,7 +250,7 @@ Validated on load (unknown keys, wrong types, out-of-range values and inconsiste
 * `quality` - blur_var_min, edge_margin_px, min_box_area_frac.
 * `guidance` - hint_cooldown_s, announce_cooldown_s, known_object_width_cm_default, camera_hfov_deg.
 * `memory` - min_conf_to_log, log_cooldown_s, scene_every_n_s.
-* `features` - self_improve, active_hints, memory, patch_rerank, hand_guidance (off), depth_model (see limitations).
+* `features` - self_improve, active_hints, memory, `category_fallback` (off by default; enables generic YOLO labels), patch_rerank, hand_guidance (off), depth_model (see limitations).
 * `tracker` - reembed_iou, reembed_every_frames, match_iou, max_missed_frames.
 * `rerank` - deadline_s, top_patches, min_gain, accept_patch_sim, min_patch_margin.
 * `gallery_policy` - duplicate_sim, drift_min_sim.

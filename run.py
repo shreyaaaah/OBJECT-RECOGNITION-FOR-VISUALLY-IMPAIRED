@@ -23,13 +23,15 @@ log = logging.getLogger("run")
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Few-shot personal object recogniser for the visually impaired")
-    p.add_argument("--mode", choices=["live", "enrol", "eval", "benchmark"], required=True)
+    p.add_argument("--mode", choices=["live", "enrol", "eval", "benchmark", "tts-test"], required=True)
     p.add_argument("--config", default=str(HERE / "config.yaml"))
     p.add_argument("--db", default=str(HERE / "data" / "gallery.db"), help="SQLite gallery path")
     p.add_argument("--camera", default=None, help="camera index or video file (default: config camera.index)")
     p.add_argument("--images", default=None,
-                   help="enrol: folder with 3-5 sharp photos of the same object (no camera needed)")
+                   help="enrol: folder with 3-5 sharp examples of one class (no camera needed)")
     p.add_argument("--name", default=None, help="enrol: object name for --images import")
+    p.add_argument("--append-shots", action="store_true",
+                   help="enrol: add examples to an existing few-shot class")
     p.add_argument("--show", action="store_true", help="show the debug overlay window")
     p.add_argument("--keyboard-only", action="store_true", help="never try the microphone; type commands")
     p.add_argument("--max-frames", type=int, default=None)
@@ -102,9 +104,9 @@ def _run_live_or_enrol(args, cfg) -> int:
             return 0 if res.success else 1
         names = pipe.store.names()
         if names:
-            pipe.say("Ready. Personal objects: " + ", ".join(names) + ". I also identify common categories.", 40)
+            pipe.say("Few-shot recognition ready. Enrolled classes: " + ", ".join(names) + ".", 40)
         else:
-            pipe.say("Ready. I can identify supported object categories without enrollment.", 40)
+            pipe.say("Few-shot recognition ready, but no classes are enrolled. Add a few examples for each class.", 40)
         print("Live. Commands: what is this | find <obj> | where did I leave <obj> | register object | "
               "delete <obj> | list objects | stop | resume.  Press q in the window or Ctrl+C to quit.")
         pipe.run(show=args.show, max_frames=args.max_frames)
@@ -115,7 +117,7 @@ def _run_live_or_enrol(args, cfg) -> int:
 
 
 def _run_image_enrolment(args, cfg) -> int:
-    """Import local photos into the production DINOv2 gallery without a camera."""
+    """Import local few-shot class examples into the production gallery."""
     from fewshot_vi.embedder.dino_embedder import DinoEmbedder
     from fewshot_vi.gallery.enrol import is_yes, run_image_enrolment
     from fewshot_vi.gallery.store import GalleryStore
@@ -155,7 +157,8 @@ def _run_image_enrolment(args, cfg) -> int:
         print("Loading DINOv2 weights (first run downloads weights) ...")
         embedder.warmup()
         result = run_image_enrolment(image_dir=args.images, name=name, confirmed=confirmed,
-                                     cfg=cfg, store=store, embedder=embedder)
+                                     cfg=cfg, store=store, embedder=embedder,
+                                     append_shots=args.append_shots)
         print(("OK: " if result.success else "FAILED: ") + result.message)
         return 0 if result.success else 1
     except Exception as exc:  # noqa: BLE001 - give a useful model/DB failure at the CLI boundary
@@ -166,6 +169,29 @@ def _run_image_enrolment(args, cfg) -> int:
             embedder.close()
         if store is not None:
             store.close()
+
+
+def _run_tts_test(cfg) -> int:
+    """Check that the configured offline speech backend is working, no camera required."""
+    from fewshot_vi.voice.tts import Speaker, make_backend
+
+    speaker = Speaker(make_backend(), stale_s=cfg.guidance_policy.stale_speech_s)
+    try:
+        speaker.say("Speech test. If you hear this, voice output is working.", 40)
+        completed = speaker.wait_idle(15.0)
+        backend = speaker.backend.name
+        errors = speaker.errors
+        if backend == "console":
+            print("Speech backend: console fallback. Text appears above, but no audio will play.")
+            return 1
+        if not completed or errors:
+            print(f"Speech test failed: backend={backend}, completed={completed}, errors={errors}",
+                  file=sys.stderr)
+            return 1
+        print(f"Speech test completed with backend: {backend}")
+        return 0
+    finally:
+        speaker.close()
 
 
 def _run_eval(args, cfg) -> int:
@@ -229,6 +255,9 @@ def main(argv=None) -> int:
     if args.name and not args.images:
         print("error: --name is only valid with --mode enrol --images DIR", file=sys.stderr)
         return 2
+    if args.append_shots and not (args.mode == "enrol" and args.images and args.name):
+        print("error: --append-shots requires --mode enrol --images DIR --name CLASS", file=sys.stderr)
+        return 2
     sys.path.insert(0, str(HERE))
     from fewshot_vi.config import ConfigError, load_config
     try:
@@ -240,6 +269,8 @@ def main(argv=None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if args.mode in ("live", "enrol"):
         return _run_live_or_enrol(args, cfg)
+    if args.mode == "tts-test":
+        return _run_tts_test(cfg)
     if args.mode == "eval":
         return _run_eval(args, cfg)
     return _run_benchmark(args, cfg)

@@ -107,7 +107,8 @@ def draw_overlay(frame: np.ndarray, tracks: list[Track], fps: float, stats: Late
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
         score = (f" {t.match.score:.2f}" if t.match and t.match.object_id is not None
                  else f" {t.score:.2f}" if t.class_name is not None else "")
-        label = f"#{t.track_id} {name or '?'}{score}"
+        proposal = f" [{t.class_name}]" if t.class_name and name is None else ""
+        label = f"#{t.track_id} {name or '?'}{proposal}{score}"
         cv2.putText(out, label, (x1, max(12, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
     lines = [f"FPS {fps:.1f}"]
     for stage in ("detect", "embed", "match", "rerank", "guidance", "total"):
@@ -188,7 +189,8 @@ class Pipeline:
             self._replies.put(text)
             return
         names = self.store.names()
-        categories = getattr(self.detector, "class_names", [])
+        categories = (getattr(self.detector, "class_names", [])
+                      if self.cfg.features.category_fallback else [])
         cmd = parse_command(text, list(dict.fromkeys(names + categories)), self.cfg.voice.fuzzy_cutoff)
         I = Intent
         if cmd.intent in (I.DELETE, I.CONFUSER) and cmd.name not in names:
@@ -213,8 +215,7 @@ class Pipeline:
             self.say(f"Looking for {cmd.name}.")
         elif cmd.intent == I.MEMORY_QUERY:
             if cmd.name not in self.store.names():
-                self.say(f"I can identify {cmd.name} while it is visible, but I need it in your personal gallery "
-                         "to remember where it was seen.")
+                self.say(f"I have not learned the {cmd.name} class yet. Add a few examples before asking me to find it.")
             else:
                 self.say(self.memory.answer(cmd.name))
         elif cmd.intent == I.ENROL:
@@ -224,7 +225,8 @@ class Pipeline:
             self.say(f"Delete {cmd.name}? Say yes to confirm.", eng.PRIORITY_SYSTEM)
         elif cmd.intent == I.LIST:
             names = self.store.names()
-            self.say("You have " + (", ".join(names) + "." if names else "no objects yet."))
+            self.say("You have " + (", ".join(names) + "." if names else
+                     "no few-shot classes enrolled yet. Add a few examples for each class."))
         elif cmd.intent == I.MUTE:
             self.state.set_muted(True)
             self.speaker.clear(below_priority=eng.PRIORITY_ANSWER)
@@ -316,20 +318,33 @@ class Pipeline:
             t.smoothed_conf = float(np.mean(t.conf_history))
         elif t.smoothed_id is None:
             t.smoothed_conf = 0.0
-        # A confident personalized identity wins; otherwise announce the
-        # detector's temporally stable category label.
-        if t.smoothed_name is not None or t.class_name is None:
-            t.category_history.append(None)
+        # The detector label is a proposal, not the few-shot answer. By default
+        # only an accepted gallery match may be named. The optional fallback
+        # exposes ordinary pretrained YOLO categories when explicitly enabled.
+        if t.smoothed_name is not None or not self.cfg.features.category_fallback:
+            t.category_history.clear()
             return
-        t.category_history.append(t.class_name)
-        categories = [name for name in t.category_history if name is not None]
-        if categories:
-            category, count = Counter(categories).most_common(1)[0]
-            if count >= self.cfg.temporal.min_votes:
+        if t.missed == 0:
+            if (t.class_name is not None
+                    and t.score >= self.cfg.detector.category_min_conf):
+                if t.category_history and t.category_history[-1][0] != t.class_name:
+                    t.category_history.clear()
+                t.category_history.append((t.class_name, t.score))
+            else:
+                t.category_history.append((None, t.score))
+        streak = []
+        for name, score in reversed(t.category_history):
+            if name is None:
+                break
+            streak.append((name, score))
+        if len(streak) >= self.cfg.temporal.min_votes:
+            category = streak[0][0]
+            mean_conf = float(np.mean([score for _, score in streak]))
+            if mean_conf >= self.cfg.detector.category_min_conf:
                 t.smoothed_id = None
                 t.smoothed_name = category
-                t.smoothed_conf = float(t.score)
-                t.stable_accepts = count
+                t.smoothed_conf = mean_conf
+                t.stable_accepts = len(streak)
 
     def process_frame(self, frame: np.ndarray, ts: float) -> list[GuidanceEvent]:
         """All per-frame work. Raises on error; ``step`` wraps it."""
