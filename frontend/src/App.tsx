@@ -53,6 +53,8 @@ function App() {
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null)
   const [cameraError, setCameraError] = useState('')
   const [cameraBusy, setCameraBusy] = useState(false)
+  const [previewMinimized, setPreviewMinimized] = useState(false)
+  const [appFullscreen, setAppFullscreen] = useState(false)
   const [live, setLive] = useState(false)
   const [mode, setMode] = useState<'IDENTIFY' | 'FIND'>('IDENTIFY')
   const [target, setTarget] = useState('')
@@ -69,6 +71,7 @@ function App() {
   const [lastError, setLastError] = useState('')
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const appShellRef = useRef<HTMLElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const recordTimerRef = useRef<number | undefined>(undefined)
@@ -97,12 +100,29 @@ function App() {
   }, [refresh])
 
   useEffect(() => {
+    const updateFullscreenState = () => setAppFullscreen(document.fullscreenElement === appShellRef.current)
+    document.addEventListener('fullscreenchange', updateFullscreenState)
+    return () => document.removeEventListener('fullscreenchange', updateFullscreenState)
+  }, [])
+
+  const toggleAppFullscreen = async () => {
+    const appShell = appShellRef.current
+    if (!appShell) return
+    try {
+      if (document.fullscreenElement === appShell) await document.exitFullscreen()
+      else await appShell.requestFullscreen()
+    } catch {
+      setNotice('Full-screen mode was blocked by the browser. Use the browser window controls to maximize it.')
+    }
+  }
+
+  useEffect(() => {
     streamRef.current = cameraStream
     if (videoRef.current && cameraStream) {
       videoRef.current.srcObject = cameraStream
       void videoRef.current.play().catch(() => undefined)
     }
-  }, [cameraStream, tab])
+  }, [cameraStream, tab, previewMinimized])
 
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -324,10 +344,13 @@ function App() {
   const loaded = Boolean(health?.models_loaded.detector && health?.models_loaded.embedder)
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" ref={appShellRef}>
       <header className="topbar">
         <div className="brand-mark" aria-hidden="true">V</div>
         <div className="brand-copy"><p className="eyebrow">LOCAL COMPUTER VISION</p><h1>See & Remember</h1></div>
+        <button className="button secondary fullscreen-button" onClick={() => void toggleAppFullscreen()} aria-pressed={appFullscreen}>
+          {appFullscreen ? 'Exit full screen' : 'Maximize screen'}
+        </button>
         <div className={`service-status ${loaded ? 'ready' : ''}`} role="status">
           <span className="status-dot" />{loaded ? 'Vision system ready' : 'Connecting to vision system'}
         </div>
@@ -349,11 +372,19 @@ function App() {
               <div><p className="eyebrow">REAL-TIME PERSONAL OBJECT RECOGNITION</p><h2>What is around you?</h2></div>
               <span className={`tag ${loaded ? 'tag-green' : ''}`}>{loaded ? 'Models loaded' : 'Waiting for models'}</span>
             </div>
-            <div className="camera-frame">
-              {cameraStream
-                ? <video ref={videoRef} autoPlay muted playsInline aria-label="Live camera preview" />
-                : <div className="camera-placeholder"><span className="camera-icon" aria-hidden="true">◉</span><strong>Your camera preview appears here</strong><span>Video stays on this computer and is sent only to the local service for recognition.</span></div>}
-              {live && <div className="live-indicator"><span /> LIVE</div>}
+            <div className={`camera-frame ${previewMinimized ? 'is-minimized' : ''}`}>
+              {!previewMinimized && <>
+                {cameraStream
+                  ? <video ref={videoRef} autoPlay muted playsInline aria-label="Live camera preview" />
+                  : <div className="camera-placeholder"><span className="camera-icon" aria-hidden="true">◉</span><strong>Your camera preview appears here</strong><span>Video stays on this computer and is sent only to the local service for recognition.</span></div>}
+                {live && <div className="live-indicator"><span /> LIVE</div>}
+              </>}
+              {previewMinimized && <span className="minimized-label">Camera preview minimized</span>}
+              <div className="camera-view-actions">
+                <button className="button camera-action" onClick={() => setPreviewMinimized((value) => !value)} aria-expanded={!previewMinimized}>
+                  {previewMinimized ? 'Restore preview' : 'Minimize preview'}
+                </button>
+              </div>
             </div>
             {cameraError && <p className="inline-error" role="alert">{cameraError}</p>}
             <div className="control-row">
